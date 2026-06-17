@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
 # ==================== КОНФИГУРАЦИЯ ====================
-BOT_TOKEN = os.getenv("8930028149:AAHzZWfllKQfciN9e50qB-wyiDaf8cbp4mU")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")  # Значение по умолчанию
 CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
