@@ -4,6 +4,8 @@ import asyncio
 import logging
 import json
 import socket
+import subprocess
+import platform
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -14,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 15  # Секунд (1:30 минуты)
+CHECK_INTERVAL = 15 # Секунд (1:30 минуты)
 
 # 👑 АДМИН
 ADMIN_ID = 5877790074
@@ -272,7 +274,7 @@ def get_ping_keyboard():
         for server in servers:
             builder.button(
                 text=f"🖥️ {server['name']}",
-                url=f"http://{server['ip']}"  # Сразу открываем IP
+                callback_data=f"ping_{server['name']}"  # Теперь callback, а не url
             )
         builder.button(text="─" * 20, callback_data="separator")
     
@@ -280,6 +282,77 @@ def get_ping_keyboard():
     builder.adjust(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1)
     
     return builder.as_markup()
+
+
+# ============ ФУНКЦИЯ ПИНГА ============
+async def ping_server_icmp(ip, count=2):
+    """Пинг сервера через ICMP."""
+    try:
+        # Определяем параметры в зависимости от ОС
+        if platform.system().lower() == 'windows':
+            param = '-n'
+        else:
+            param = '-c'
+        
+        # Запускаем пинг
+        result = subprocess.run(
+            ['ping', param, str(count), ip],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        # Парсим результат
+        if result.returncode == 0:
+            # Ищем время пинга в выводе
+            output = result.stdout
+            if 'time=' in output or 'время=' in output:
+                # Для Linux
+                if 'time=' in output:
+                    times = []
+                    for line in output.split('\n'):
+                        if 'time=' in line:
+                            # Извлекаем время
+                            import re
+                            time_match = re.search(r'time=(\d+\.?\d*)', line)
+                            if time_match:
+                                times.append(float(time_match.group(1)))
+                    if times:
+                        avg_time = sum(times) / len(times)
+                        return True, f"✅ Доступен (ping: {avg_time:.1f}мс)"
+                # Для Windows
+                elif 'время=' in output or 'время<' in output:
+                    times = []
+                    for line in output.split('\n'):
+                        if 'время=' in line or 'время<' in line:
+                            import re
+                            time_match = re.search(r'время[=<>](\d+)', line)
+                            if time_match:
+                                times.append(float(time_match.group(1)))
+                    if times:
+                        avg_time = sum(times) / len(times)
+                        return True, f"✅ Доступен (ping: {avg_time:.1f}мс)"
+                return True, "✅ Доступен"
+            else:
+                return True, "✅ Доступен"
+        else:
+            return False, "❌ Недоступен"
+    except subprocess.TimeoutExpired:
+        return False, "❌ Таймаут"
+    except Exception as e:
+        return False, f"❌ Ошибка: {e}"
+
+
+async def check_port(ip, port, timeout=2):
+    """Проверка доступности порта."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((ip, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
 
 
 # ============ КОМАНДЫ УПРАВЛЕНИЯ ДОСТУПОМ ============
@@ -441,14 +514,12 @@ async def ip_command(message: types.Message):
         await message.answer("❌ ID должен быть числом")
         return
     
-    # Получаем данные из API
     data = await fetch_servers()
     
     if not data or not isinstance(data, list):
         await message.answer("❌ Нет данных от API")
         return
     
-    # Ищем сервер по ID
     server = None
     for s in data:
         if isinstance(s, dict) and s.get("id") == server_id:
@@ -463,7 +534,6 @@ async def ip_command(message: types.Message):
     ip = server.get("ip", "Неизвестно")
     port = server.get("port", "Неизвестно")
     
-    # Формируем ответ
     if ip != "Неизвестно" and port != "Неизвестно":
         response = (
             f"🖥️ *{name}*\n"
@@ -493,7 +563,7 @@ async def start_command(message: types.Message):
         "Бот отслеживает изменения онлайна и отправляет уведомления в канал.\n\n"
         f"📌 Интервал проверки: {CHECK_INTERVAL} секунд\n"
         f"📢 Уведомления приходят в этот канал\n\n"
-        "📡 /ping — Список серверов для подключения\n"
+        "📡 /ping — Пинг серверов\n"
         "🔍 /ip <ID> — Получить IP и порт сервера",
         parse_mode="Markdown"
     )
@@ -574,7 +644,7 @@ async def ping_menu_command(message: types.Message):
     
     keyboard = get_ping_keyboard()
     await message.answer(
-        "📡 *Выберите сервер:*\n\n"
+        "📡 *Выберите сервер для пинга:*\n\n"
         "Нажмите на кнопку с названием сервера",
         parse_mode="Markdown",
         reply_markup=keyboard
@@ -593,7 +663,7 @@ async def help_command(message: types.Message):
         "/start — Информация о боте",
         "/status — Онлайн всех серверов",
         "/refresh — Обновить состояние",
-        "/ping — Список серверов для подключения",
+        "/ping — Пинг серверов",
         "/ip <ID> — Получить IP и порт сервера",
         "/help — Список команд"
     ]
@@ -623,12 +693,62 @@ async def handle_callback(callback: types.CallbackQuery):
     if data == "refresh_ping":
         keyboard = get_ping_keyboard()
         await callback.message.edit_text(
-            "📡 *Выберите сервер:*\n\n"
+            "📡 *Выберите сервер для пинга:*\n\n"
             "Нажмите на кнопку с названием сервера",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
         await callback.answer("🔄 Обновлено")
+        return
+    
+    if data.startswith("ping_"):
+        server_name = data.replace("ping_", "")
+        server_info = await get_server_info(server_name)
+        
+        if not server_info:
+            await callback.answer("❌ Сервер не найден")
+            return
+        
+        ip = server_info["ip"]
+        port = server_info["port"]
+        
+        # Отправляем статус "пингуем..."
+        await callback.answer(f"🔍 Пингую {server_name}...")
+        
+        # Показываем что пингуем
+        status_msg = await callback.message.answer(
+            f"🔍 *Пингую {server_name}...*\n"
+            f"🌐 {ip}:{port}",
+            parse_mode="Markdown"
+        )
+        
+        # Делаем ICMP пинг
+        success, ping_result = await ping_server_icmp(ip, count=2)
+        
+        # Дополнительно проверяем порт
+        port_status = await check_port(ip, port)
+        port_text = "✅ открыт" if port_status else "❌ закрыт"
+        
+        # Формируем результат
+        if success:
+            result_text = (
+                f"📡 *Результат пинга*\n\n"
+                f"🖥️ {server_name}\n"
+                f"🌐 {ip}:{port}\n\n"
+                f"{ping_result}\n"
+                f"🔌 Порт {port}: {port_text}"
+            )
+        else:
+            result_text = (
+                f"📡 *Результат пинга*\n\n"
+                f"🖥️ {server_name}\n"
+                f"🌐 {ip}:{port}\n\n"
+                f"❌ Сервер не отвечает на пинг"
+            )
+        
+        # Редактируем сообщение с результатом
+        await status_msg.edit_text(result_text, parse_mode="Markdown")
+        await callback.answer("✅ Готово!")
 
 
 # ============ ОБРАБОТЧИК ДЛЯ ЛИЧНЫХ СООБЩЕНИЙ ============
