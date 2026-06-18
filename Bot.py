@@ -10,7 +10,7 @@ from aiogram.filters import Command
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 15  # Секунд (1:30 минуты)
+CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
 
 # 🔇 Серверы, которые НЕ нужно отслеживать (по ID)
 IGNORED_SERVERS = [
@@ -72,13 +72,22 @@ async def check_and_notify():
                     "port": server.get("port", "Неизвестно")
                 }
     
-    # Проверяем новые серверы и изменения
+    # === ПРОВЕРКА УДАЛЕННЫХ СЕРВЕРОВ ===
+    for server_id, old_info in server_state.items():
+        if server_id not in current_state:
+            name = old_info.get("name", "Неизвестный сервер")
+            # Отправляем уведомление об удалении (даже если он в игноре)
+            message = f"🥀 *{name}*\nСервер удален"
+            await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
+            logger.info(f"🥀 Сервер удален: {name} (ID: {server_id})")
+    
+    # === ПРОВЕРКА НОВЫХ СЕРВЕРОВ И ИЗМЕНЕНИЙ ===
     for server_id, info in current_state.items():
         name = info["name"]
         current_online = info["online"]
         is_ignored = server_id in IGNORED_SERVERS
         
-        # === НОВЫЙ СЕРВЕР (если его не было в прошлом состоянии) ===
+        # Новый сервер (если его не было в прошлом состоянии)
         if server_id not in server_state:
             # Отправляем уведомление о новом сервере (даже если он в игноре)
             message = (
@@ -91,11 +100,11 @@ async def check_and_notify():
             logger.info(f"🆕 Новый сервер: {name} (ID: {server_id})")
             continue  # Пропускаем уведомления о заходе/выходе для нового сервера
         
-        # === ИГНОРИРУЕМЫЙ СЕРВЕР - пропускаем уведомления ===
+        # Игнорируемый сервер - пропускаем уведомления
         if is_ignored:
             continue
         
-        # === ИЗМЕНЕНИЕ ОНЛАЙНА (только для НЕ игнорируемых) ===
+        # Изменение онлайна (только для НЕ игнорируемых)
         old_online = server_state[server_id]["online"]
         
         if current_online > old_online:
