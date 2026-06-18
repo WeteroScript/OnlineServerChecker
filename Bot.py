@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 15 # Секунд (1:30 минуты)
+CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
 
 # 👑 АДМИН
 ADMIN_ID = 5877790074
@@ -31,49 +31,49 @@ IGNORED_SERVERS = [
 # 📋 Список серверов для пинга
 PING_SERVERS = {
     "Dev Test Server": [
-        {"name": "D2", "ip": "5.188.118.53", "port": 7720},
-        {"name": "D1", "ip": "5.188.118.53", "port": 7710},
-        {"name": "HARD-2", "ip": "5.188.118.53", "port": 7875},
-        {"name": "HARD-1", "ip": "5.188.118.53", "port": 7870},
-        {"name": "BURY-2", "ip": "5.188.118.53", "port": 7865},
-        {"name": "BURY-1", "ip": "5.188.118.53", "port": 7860},
-        {"name": "MAZER-2", "ip": "5.188.118.53", "port": 7855},
-        {"name": "MAZER-1", "ip": "5.188.118.53", "port": 7850},
-        {"name": "ihn1fi-2", "ip": "5.188.118.53", "port": 7845},
-        {"name": "ihn1fi-1", "ip": "5.188.118.53", "port": 7840},
-        {"name": "Baton-2", "ip": "5.188.118.53", "port": 7835},
-        {"name": "Baton-1", "ip": "5.188.118.53", "port": 7830},
-        {"name": "Tokie-2", "ip": "5.188.118.53", "port": 7825},
-        {"name": "Tokie-1", "ip": "5.188.118.53", "port": 7820},
-        {"name": "estranossa-2", "ip": "5.188.118.53", "port": 7815},
-        {"name": "estranossa-1", "ip": "5.188.118.53", "port": 7810},
-        {"name": "Test Server Core", "ip": "51.159.125.199", "port": 7777},
-        {"name": "like2bemike-2", "ip": "5.188.118.53", "port": 7880},
-        {"name": "like2bemike-1", "ip": "5.188.118.53", "port": 7885},
-        {"name": "slaughter-1", "ip": "5.188.118.53", "port": 7890},
-        {"name": "slaughter-2", "ip": "5.188.118.53", "port": 7895},
-        {"name": "donbeton-1", "ip": "5.188.118.53", "port": 7900},
-        {"name": "donbeton-2", "ip": "5.188.118.53", "port": 7905},
+        {"name": "D2", "ip": "5.188.118.53"},
+        {"name": "D1", "ip": "5.188.118.53"},
+        {"name": "HARD-2", "ip": "5.188.118.53"},
+        {"name": "HARD-1", "ip": "5.188.118.53"},
+        {"name": "BURY-2", "ip": "5.188.118.53"},
+        {"name": "BURY-1", "ip": "5.188.118.53"},
+        {"name": "MAZER-2", "ip": "5.188.118.53"},
+        {"name": "MAZER-1", "ip": "5.188.118.53"},
+        {"name": "ihn1fi-2", "ip": "5.188.118.53"},
+        {"name": "ihn1fi-1", "ip": "5.188.118.53"},
+        {"name": "Baton-2", "ip": "5.188.118.53"},
+        {"name": "Baton-1", "ip": "5.188.118.53"},
+        {"name": "Tokie-2", "ip": "5.188.118.53"},
+        {"name": "Tokie-1", "ip": "5.188.118.53"},
+        {"name": "estranossa-2", "ip": "5.188.118.53"},
+        {"name": "estranossa-1", "ip": "5.188.118.53"},
+        {"name": "Test Server Core", "ip": "51.159.125.199"},
+        {"name": "like2bemike-2", "ip": "5.188.118.53"},
+        {"name": "like2bemike-1", "ip": "5.188.118.53"},
+        {"name": "slaughter-1", "ip": "5.188.118.53"},
+        {"name": "slaughter-2", "ip": "5.188.118.53"},
+        {"name": "donbeton-1", "ip": "5.188.118.53"},
+        {"name": "donbeton-2", "ip": "5.188.118.53"},
     ],
     "Work Test Server": [
-        {"name": "P1", "ip": "80.66.82.19", "port": 7010},
-        {"name": "P2", "ip": "80.66.82.19", "port": 7020},
-        {"name": "P3", "ip": "80.66.82.19", "port": 7030},
-        {"name": "P4", "ip": "80.66.82.19", "port": 7040},
-        {"name": "YouTube", "ip": "80.66.82.19", "port": 7090},
-        {"name": "stage-229", "ip": "80.66.82.150", "port": 5125},
-        {"name": "CBT-PR", "ip": "185.169.134.21", "port": 5125},
-        {"name": "CBT2-PR", "ip": "185.169.134.20", "port": 5125},
+        {"name": "P1", "ip": "80.66.82.19"},
+        {"name": "P2", "ip": "80.66.82.19"},
+        {"name": "P3", "ip": "80.66.82.19"},
+        {"name": "P4", "ip": "80.66.82.19"},
+        {"name": "YouTube", "ip": "80.66.82.19"},
+        {"name": "stage-229", "ip": "80.66.82.150"},
+        {"name": "CBT-PR", "ip": "185.169.134.21"},
+        {"name": "CBT2-PR", "ip": "185.169.134.20"},
     ],
     "Local Test Server": [
-        {"name": "feature-update-wp2", "ip": "10.211.0.195", "port": 32204},
-        {"name": "feature-add-k8s-deploy", "ip": "10.211.3.89", "port": 32541},
-        {"name": "feature-season4-main", "ip": "10.211.3.160", "port": 32016},
-        {"name": "feature-notfix-sounds", "ip": "10.211.0.29", "port": 31342},
-        {"name": "feature-season3-main", "ip": "10.211.2.178", "port": 31191},
-        {"name": "office_perf", "ip": "10.3.0.132", "port": 5125},
-        {"name": "test-k8s-2", "ip": "10.211.2.178", "port": 31475},
-        {"name": "test-k8s-1", "ip": "10.211.0.81", "port": 30924},
+        {"name": "feature-update-wp2", "ip": "10.211.0.195"},
+        {"name": "feature-add-k8s-deploy", "ip": "10.211.3.89"},
+        {"name": "feature-season4-main", "ip": "10.211.3.160"},
+        {"name": "feature-notfix-sounds", "ip": "10.211.0.29"},
+        {"name": "feature-season3-main", "ip": "10.211.2.178"},
+        {"name": "office_perf", "ip": "10.3.0.132"},
+        {"name": "test-k8s-2", "ip": "10.211.2.178"},
+        {"name": "test-k8s-1", "ip": "10.211.0.81"},
     ]
 }
 
@@ -91,7 +91,7 @@ def load_allowed_users():
         save_allowed_users(default_users)
         return default_users
     except Exception as e:
-        logger.error(f"Ошибка загрузки allowed_users: {e}")
+        logging.error(f"Ошибка загрузки allowed_users: {e}")
         return [ADMIN_ID]
 
 def save_allowed_users(users):
@@ -100,7 +100,7 @@ def save_allowed_users(users):
         with open(ALLOWED_USERS_FILE, "w") as f:
             json.dump(users, f)
     except Exception as e:
-        logger.error(f"Ошибка сохранения allowed_users: {e}")
+        logging.error(f"Ошибка сохранения allowed_users: {e}")
 
 # Загружаем разрешенных пользователей
 ALLOWED_USER_IDS = load_allowed_users()
@@ -274,7 +274,7 @@ def get_ping_keyboard():
         for server in servers:
             builder.button(
                 text=f"🖥️ {server['name']}",
-                callback_data=f"ping_{server['name']}"  # Теперь callback, а не url
+                callback_data=f"ping_{server['name']}"
             )
         builder.button(text="─" * 20, callback_data="separator")
     
@@ -284,75 +284,27 @@ def get_ping_keyboard():
     return builder.as_markup()
 
 
-# ============ ФУНКЦИЯ ПИНГА ============
-async def ping_server_icmp(ip, count=2):
-    """Пинг сервера через ICMP."""
+# ============ ТВОЙ КОД ПИНГА (ТОЛЬКО ПИНГ, БЕЗ ПОРТА) ============
+def ping_server(ip, count=2):
+    """ICMP пинг через системную команду."""
     try:
-        # Определяем параметры в зависимости от ОС
         if platform.system().lower() == 'windows':
             param = '-n'
         else:
             param = '-c'
         
-        # Запускаем пинг
         result = subprocess.run(
-            ['ping', param, str(count), ip],
+            ["ping", param, str(count), ip],
             capture_output=True,
             text=True,
             timeout=10
         )
         
-        # Парсим результат
-        if result.returncode == 0:
-            # Ищем время пинга в выводе
-            output = result.stdout
-            if 'time=' in output or 'время=' in output:
-                # Для Linux
-                if 'time=' in output:
-                    times = []
-                    for line in output.split('\n'):
-                        if 'time=' in line:
-                            # Извлекаем время
-                            import re
-                            time_match = re.search(r'time=(\d+\.?\d*)', line)
-                            if time_match:
-                                times.append(float(time_match.group(1)))
-                    if times:
-                        avg_time = sum(times) / len(times)
-                        return True, f"✅ Доступен (ping: {avg_time:.1f}мс)"
-                # Для Windows
-                elif 'время=' in output or 'время<' in output:
-                    times = []
-                    for line in output.split('\n'):
-                        if 'время=' in line or 'время<' in line:
-                            import re
-                            time_match = re.search(r'время[=<>](\d+)', line)
-                            if time_match:
-                                times.append(float(time_match.group(1)))
-                    if times:
-                        avg_time = sum(times) / len(times)
-                        return True, f"✅ Доступен (ping: {avg_time:.1f}мс)"
-                return True, "✅ Доступен"
-            else:
-                return True, "✅ Доступен"
-        else:
-            return False, "❌ Недоступен"
+        return result.returncode == 0, result.stdout
     except subprocess.TimeoutExpired:
-        return False, "❌ Таймаут"
+        return False, "Таймаут"
     except Exception as e:
-        return False, f"❌ Ошибка: {e}"
-
-
-async def check_port(ip, port, timeout=2):
-    """Проверка доступности порта."""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        result = sock.connect_ex((ip, port))
-        sock.close()
-        return result == 0
-    except Exception:
-        return False
+        return False, str(e)
 
 
 # ============ КОМАНДЫ УПРАВЛЕНИЯ ДОСТУПОМ ============
@@ -710,43 +662,32 @@ async def handle_callback(callback: types.CallbackQuery):
             return
         
         ip = server_info["ip"]
-        port = server_info["port"]
         
         # Отправляем статус "пингуем..."
         await callback.answer(f"🔍 Пингую {server_name}...")
         
-        # Показываем что пингуем
         status_msg = await callback.message.answer(
             f"🔍 *Пингую {server_name}...*\n"
-            f"🌐 {ip}:{port}",
+            f"🌐 {ip}",
             parse_mode="Markdown"
         )
         
-        # Делаем ICMP пинг
-        success, ping_result = await ping_server_icmp(ip, count=2)
-        
-        # Дополнительно проверяем порт
-        port_status = await check_port(ip, port)
-        port_text = "✅ открыт" if port_status else "❌ закрыт"
+        # ===== ТВОЙ КОД ПИНГА (ТОЛЬКО ПИНГ, БЕЗ ПОРТА) =====
+        ping_success, ping_output = ping_server(ip, count=2)
         
         # Формируем результат
-        if success:
-            result_text = (
-                f"📡 *Результат пинга*\n\n"
-                f"🖥️ {server_name}\n"
-                f"🌐 {ip}:{port}\n\n"
-                f"{ping_result}\n"
-                f"🔌 Порт {port}: {port_text}"
-            )
+        if ping_success:
+            ping_status = "✅ ДОСТУПЕН"
         else:
-            result_text = (
-                f"📡 *Результат пинга*\n\n"
-                f"🖥️ {server_name}\n"
-                f"🌐 {ip}:{port}\n\n"
-                f"❌ Сервер не отвечает на пинг"
-            )
+            ping_status = "❌ НЕДОСТУПЕН"
         
-        # Редактируем сообщение с результатом
+        result_text = (
+            f"📡 *Результат пинга*\n\n"
+            f"🖥️ *{server_name}*\n"
+            f"🌐 {ip}\n\n"
+            f"📶 {ping_status}"
+        )
+        
         await status_msg.edit_text(result_text, parse_mode="Markdown")
         await callback.answer("✅ Готово!")
 
