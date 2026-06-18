@@ -14,7 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 15  # Секунд (1:30 минуты)
+CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
 
 # 👑 АДМИН
 ADMIN_ID = 5877790074
@@ -255,19 +255,6 @@ def is_admin(user_id: int) -> bool:
 # ============================================================
 
 
-# ============ ПИНГ СЕРВЕРА ============
-async def ping_server(ip, port, timeout=3):
-    """Проверка доступности сервера по TCP порту."""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        result = sock.connect_ex((ip, port))
-        sock.close()
-        return result == 0
-    except Exception:
-        return False
-
-
 async def get_server_info(server_name):
     """Найти сервер по имени."""
     for category, servers in PING_SERVERS.items():
@@ -281,26 +268,18 @@ def get_ping_keyboard():
     """Создать клавиатуру с серверами по категориям."""
     builder = InlineKeyboardBuilder()
     
-    # Сначала добавляем все серверы
     for category, servers in PING_SERVERS.items():
-        # Добавляем заголовок категории (как кнопка, но неактивная)
-        # Используем кнопку с callback, который ничего не делает
         for server in servers:
             builder.button(
                 text=f"🖥️ {server['name']}",
                 callback_data=f"ping_{server['name']}"
             )
-        # Добавляем разделитель после каждой категории
         builder.button(text="─" * 20, callback_data="separator")
     
-    # Добавляем кнопку обновить
     builder.button(text="🔄 Обновить", callback_data="refresh_ping")
-    
-    # Настраиваем колонки (3 кнопки в ряду для компактности)
     builder.adjust(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1)
     
     return builder.as_markup()
-# ============================================================
 
 
 # ============ КОМАНДЫ УПРАВЛЕНИЯ ДОСТУПОМ ============
@@ -567,7 +546,7 @@ async def ping_menu_command(message: types.Message):
     
     keyboard = get_ping_keyboard()
     await message.answer(
-        "📡 *Выберите сервер для пинга:*\n\n"
+        "📡 *Выберите сервер:*\n\n"
         "Нажмите на кнопку с названием сервера",
         parse_mode="Markdown",
         reply_markup=keyboard
@@ -587,7 +566,7 @@ async def help_command(message: types.Message):
         "/status — Онлайн всех серверов",
         "/refresh — Обновить состояние",
         "/ignored — Список игнорируемых серверов",
-        "/ping — Проверить доступность серверов",
+        "/ping — Список серверов для подключения",
         "/help — Список команд"
     ]
     
@@ -609,24 +588,21 @@ async def handle_callback(callback: types.CallbackQuery):
     """Обработка нажатий на кнопки."""
     data = callback.data
     
-    # Разделитель - ничего не делаем
     if data == "separator":
         await callback.answer()
         return
     
-    # Обновить список
     if data == "refresh_ping":
         keyboard = get_ping_keyboard()
         await callback.message.edit_text(
-            "📡 *Выберите сервер для пинга:*\n\n"
+            "📡 *Выберите сервер:*\n\n"
             "Нажмите на кнопку с названием сервера",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
-        await callback.answer("🔄 Список обновлен")
+        await callback.answer("🔄 Обновлено")
         return
     
-    # Пинг сервера
     if data.startswith("ping_"):
         server_name = data.replace("ping_", "")
         server_info = await get_server_info(server_name)
@@ -635,28 +611,24 @@ async def handle_callback(callback: types.CallbackQuery):
             await callback.answer("❌ Сервер не найден")
             return
         
-        # Отправляем статус
-        await callback.answer(f"🔍 Пингую {server_name}...")
+        ip = server_info["ip"]
         
-        # Проверяем доступность
-        is_online = await ping_server(server_info["ip"], server_info["port"])
+        # Кнопка для перехода по IP
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🌐 Перейти",
+                url=f"http://{ip}"
+            )]
+        ])
         
-        status = "✅ ДОСТУПЕН" if is_online else "❌ НЕДОСТУПЕН"
-        emoji = "🟢" if is_online else "🔴"
-        
-        # Отправляем результат
-        result_message = (
-            f"{emoji} *Результат пинга*\n\n"
-            f"📌 {server_name}\n"
-            f"🌐 {server_info['ip']}:{server_info['port']}\n\n"
-            f"**{status}**"
+        await callback.message.answer(
+            f"🌐 *{server_name}*\n\n"
+            f"📍 `{ip}`\n\n"
+            f"Нажмите кнопку, чтобы перейти",
+            parse_mode="Markdown",
+            reply_markup=keyboard
         )
-        
-        # Отправляем новым сообщением, чтобы не терять меню
-        await callback.message.answer(result_message, parse_mode="Markdown")
-        
-        # Показываем уведомление
-        await callback.answer(f"✅ {server_name}: {status}")
+        await callback.answer(f"🌐 {ip}")
 
 
 # ============ ОБРАБОТЧИК ДЛЯ ЛИЧНЫХ СООБЩЕНИЙ ============
