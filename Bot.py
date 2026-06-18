@@ -2,6 +2,8 @@ import os
 import aiohttp
 import asyncio
 import logging
+import json
+import socket
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -12,6 +14,9 @@ API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
 CHECK_INTERVAL = 15  # Секунд (1:30 минуты)
 
+# 👑 АДМИН
+ADMIN_ID = 5877790074
+
 # 🔇 Серверы, которые НЕ нужно отслеживать (по ID)
 IGNORED_SERVERS = [
     202, 203, 204, 205, 206, 207, 208, 209, 210,
@@ -19,11 +24,34 @@ IGNORED_SERVERS = [
     220, 221, 222, 223, 224, 225, 226
 ]
 
-# ✅ Разрешенные ID чатов (только эти каналы могут использовать бота)
-ALLOWED_CHAT_IDS = [
-    -1003909198412,  # ID твоего канала (замени на свой)
-    # Можешь добавить другие каналы через запятую
-]
+# Файл для хранения разрешенных пользователей
+ALLOWED_USERS_FILE = "allowed_users.json"
+
+# Загружаем разрешенных пользователей
+def load_allowed_users():
+    """Загрузить список разрешенных пользователей из файла."""
+    try:
+        with open(ALLOWED_USERS_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Если файла нет, создаем с админом по умолчанию
+        default_users = [ADMIN_ID]
+        save_allowed_users(default_users)
+        return default_users
+    except Exception as e:
+        logger.error(f"Ошибка загрузки allowed_users: {e}")
+        return [ADMIN_ID]
+
+def save_allowed_users(users):
+    """Сохранить список разрешенных пользователей в файл."""
+    try:
+        with open(ALLOWED_USERS_FILE, "w") as f:
+            json.dump(users, f)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения allowed_users: {e}")
+
+# Загружаем разрешенных пользователей
+ALLOWED_USER_IDS = load_allowed_users()
 # ================================================
 
 logging.basicConfig(level=logging.INFO)
@@ -158,13 +186,185 @@ async def monitor_loop():
             logger.error(f"Ошибка в мониторинге: {e}")
 
 
-# ============ ПРОВЕРКА ДОСТУПА (для всех команд) ============
+# ============ ПРОВЕРКА ДОСТУПА ============
 async def check_access(message: types.Message) -> bool:
-    """Проверяет, разрешен ли чат для использования бота."""
-    if message.chat.id not in ALLOWED_CHAT_IDS:
-        await message.answer("🚫 Доступ закрыт")
-        return False
-    return True
+    """Проверяет, есть ли у пользователя доступ к боту."""
+    user_id = message.from_user.id
+    
+    # Админ имеет доступ всегда
+    if user_id == ADMIN_ID:
+        return True
+    
+    # Проверяем в списке разрешенных
+    if user_id in ALLOWED_USER_IDS:
+        return True
+    
+    await message.answer("🚫 У вас нет доступа к этому боту")
+    return False
+
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь админом."""
+    return user_id == ADMIN_ID
+# ============================================================
+
+
+# ============ КОМАНДЫ УПРАВЛЕНИЯ ДОСТУПОМ ============
+@dp.message(Command("access"))
+async def access_command(message: types.Message):
+    """Выдать доступ пользователю. Только в ЛС. /access @username или /access 123456789"""
+    # Проверяем, что это ЛС
+    if message.chat.type != "private":
+        await message.answer("❌ Эта команда работает только в личных сообщениях")
+        return
+    
+    # Проверяем, что админ
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Только админ может выдавать доступ")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "❌ Использование:\n"
+            "/access @username — выдать доступ по юзернейму\n"
+            "/access 123456789 — выдать доступ по ID"
+        )
+        return
+    
+    target = args[1]
+    user_id = None
+    
+    # Пробуем получить ID
+    if target.startswith("@"):
+        # По юзернейму
+        try:
+            user = await bot.get_chat(target)
+            user_id = user.id
+            username = target
+        except Exception as e:
+            await message.answer(f"❌ Не найден пользователь {target}")
+            return
+    else:
+        # По ID
+        try:
+            user_id = int(target)
+            username = f"ID: {user_id}"
+        except ValueError:
+            await message.answer("❌ Неверный формат. Используйте @username или ID")
+            return
+    
+    # Проверяем, что не админ
+    if user_id == ADMIN_ID:
+        await message.answer("❌ Нельзя выдать доступ админу (он и так имеет доступ)")
+        return
+    
+    # Проверяем, есть ли уже доступ
+    if user_id in ALLOWED_USER_IDS:
+        await message.answer(f"ℹ️ Пользователь {username} уже имеет доступ")
+        return
+    
+    # Добавляем доступ
+    ALLOWED_USER_IDS.append(user_id)
+    save_allowed_users(ALLOWED_USER_IDS)
+    
+    await message.answer(f"✅ Пользователь {username} получил доступ к боту")
+    logger.info(f"Админ {message.from_user.id} выдал доступ {username}")
+
+
+@dp.message(Command("unaccess"))
+async def unaccess_command(message: types.Message):
+    """Забрать доступ у пользователя. Только в ЛС. /unaccess @username или /unaccess 123456789"""
+    # Проверяем, что это ЛС
+    if message.chat.type != "private":
+        await message.answer("❌ Эта команда работает только в личных сообщениях")
+        return
+    
+    # Проверяем, что админ
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Только админ может забирать доступ")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "❌ Использование:\n"
+            "/unaccess @username — забрать доступ по юзернейму\n"
+            "/unaccess 123456789 — забрать доступ по ID"
+        )
+        return
+    
+    target = args[1]
+    user_id = None
+    
+    # Пробуем получить ID
+    if target.startswith("@"):
+        try:
+            user = await bot.get_chat(target)
+            user_id = user.id
+            username = target
+        except Exception as e:
+            await message.answer(f"❌ Не найден пользователь {target}")
+            return
+    else:
+        try:
+            user_id = int(target)
+            username = f"ID: {user_id}"
+        except ValueError:
+            await message.answer("❌ Неверный формат. Используйте @username или ID")
+            return
+    
+    # Проверяем, что не админ
+    if user_id == ADMIN_ID:
+        await message.answer("❌ Нельзя забрать доступ у админа")
+        return
+    
+    # Проверяем, есть ли доступ
+    if user_id not in ALLOWED_USER_IDS:
+        await message.answer(f"ℹ️ Пользователь {username} не имеет доступа")
+        return
+    
+    # Убираем доступ
+    ALLOWED_USER_IDS.remove(user_id)
+    save_allowed_users(ALLOWED_USER_IDS)
+    
+    await message.answer(f"✅ У пользователя {username} забран доступ к боту")
+    logger.info(f"Админ {message.from_user.id} забрал доступ у {username}")
+
+
+@dp.message(Command("users"))
+async def users_command(message: types.Message):
+    """Показать список пользователей с доступом. Только в ЛС."""
+    # Проверяем, что это ЛС
+    if message.chat.type != "private":
+        await message.answer("❌ Эта команда работает только в личных сообщениях")
+        return
+    
+    # Проверяем, что админ
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Только админ может просматривать список")
+        return
+    
+    if not ALLOWED_USER_IDS:
+        await message.answer("📋 Список пользователей с доступом пуст")
+        return
+    
+    lines = ["📋 *Пользователи с доступом:*\n"]
+    lines.append(f"👑 Админ: `{ADMIN_ID}`")
+    
+    for uid in ALLOWED_USER_IDS:
+        if uid == ADMIN_ID:
+            continue
+        try:
+            user = await bot.get_chat(uid)
+            name = user.full_name or user.username or str(uid)
+            if user.username:
+                lines.append(f"• @{user.username} (`{uid}`)")
+            else:
+                lines.append(f"• {name} (`{uid}`)")
+        except:
+            lines.append(f"• ID: `{uid}`")
+    
+    await message.answer("\n".join(lines), parse_mode="Markdown")
 # ============================================================
 
 
@@ -295,24 +495,107 @@ async def help_command(message: types.Message):
     if not await check_access(message):
         return
     
-    await message.answer(
-        "🤖 *Доступные команды:*\n\n"
-        "/start — Информация о боте\n"
-        "/status — Онлайн всех серверов\n"
-        "/refresh — Обновить состояние\n"
-        "/ignored — Список игнорируемых серверов\n"
-        "/help — Список команд",
-        parse_mode="Markdown"
+    is_admin_user = is_admin(message.from_user.id)
+    
+    commands = [
+        "🤖 *Доступные команды:*\n",
+        "/start — Информация о боте",
+        "/status — Онлайн всех серверов",
+        "/refresh — Обновить состояние",
+        "/ignored — Список игнорируемых серверов",
+        "/help — Список команд"
+    ]
+    
+    # Админские команды (только в ЛС)
+    if is_admin_user:
+        commands.extend([
+            "",
+            "👑 *Команды администратора (только в ЛС):*",
+            "/access @username/id — Выдать доступ к боту",
+            "/unaccess @username/id — Забрать доступ к боту",
+            "/users — Список пользователей с доступом"
+        ])
+    
+    await message.answer("\n".join(commands), parse_mode="Markdown")
+
+
+@dp.message(Command("ping"))
+async def ping_command(message: types.Message):
+    """Проверить доступность сервера: /ping 123"""
+    if not await check_access(message):
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("❌ Использование: /ping <ID_сервера>")
+        return
+    
+    try:
+        server_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID должен быть числом")
+        return
+    
+    # Ищем сервер
+    data = await fetch_servers()
+    if not data:
+        await message.answer("❌ Нет данных от API")
+        return
+    
+    server = next((s for s in data if s.get("id") == server_id), None)
+    if not server:
+        await message.answer(f"❌ Сервер с ID {server_id} не найден")
+        return
+    
+    name = server.get("name", "Без имени")
+    ip = server.get("ip")
+    port = server.get("port")
+    
+    if not ip:
+        await message.answer(f"❌ У сервера {name} нет IP")
+        return
+    
+    # Проверяем
+    status_msg = await message.answer(f"🔍 Пингую {name}...")
+    
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        result = sock.connect_ex((ip, port if port else 80))
+        sock.close()
+        
+        if result == 0:
+            status = "✅ ДОСТУПЕН"
+        else:
+            status = "❌ НЕДОСТУПЕН"
+    except Exception:
+        status = "❌ ОШИБКА"
+    
+    response = (
+        f"📡 *Результат пинга*\n"
+        f"📌 {name}\n"
+        f"🌐 {ip}"
     )
+    if port:
+        response += f":{port}"
+    response += f"\n\n{status}"
+    
+    await status_msg.edit_text(response, parse_mode="Markdown")
 
 
 # ============ ОБРАБОТЧИК ДЛЯ ЛИЧНЫХ СООБЩЕНИЙ ============
 @dp.message()
 async def private_message_handler(message: types.Message):
     """Обработка любых сообщений в личке."""
-    # Если это личный чат (не канал и не группа)
     if message.chat.type == "private":
-        await message.answer("🚫 Доступ закрыт")
+        # Если у пользователя нет доступа
+        if not await check_access(message):
+            return
+        # Если есть доступ, но команда не распознана
+        await message.answer(
+            "❓ Неизвестная команда\n"
+            "Используйте /help для списка команд"
+        )
 # ============================================================
 
 
@@ -321,10 +604,11 @@ async def main():
     print("=" * 50)
     print("🤖 БОТ МОНИТОРИНГА СЕРВЕРОВ")
     print("=" * 50)
+    print(f"👑 Админ: {ADMIN_ID}")
     print(f"📢 Канал: {CHANNEL_ID}")
     print(f"⏱️  Интервал: {CHECK_INTERVAL} сек")
     print(f"🔇 Игнорируется: {len(IGNORED_SERVERS)} серверов")
-    print(f"✅ Разрешено каналов: {len(ALLOWED_CHAT_IDS)}")
+    print(f"👥 Пользователей с доступом: {len(ALLOWED_USER_IDS)}")
     print("=" * 50)
     
     # Запускаем мониторинг в фоне
