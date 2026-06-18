@@ -7,12 +7,14 @@ import socket
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ================= КОНФИГУРАЦИЯ =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 15  # Секунд (1:30 минуты)
+CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
 
 # 👑 АДМИН
 ADMIN_ID = 5877790074
@@ -24,6 +26,55 @@ IGNORED_SERVERS = [
     220, 221, 222, 223, 224, 225, 226
 ]
 
+# 📋 Список серверов для пинга
+PING_SERVERS = {
+    "Dev Test Server": [
+        {"name": "D2", "ip": "5.188.118.53", "port": 7720},
+        {"name": "D1", "ip": "5.188.118.53", "port": 7710},
+        {"name": "HARD-2", "ip": "5.188.118.53", "port": 7875},
+        {"name": "HARD-1", "ip": "5.188.118.53", "port": 7870},
+        {"name": "BURY-2", "ip": "5.188.118.53", "port": 7865},
+        {"name": "BURY-1", "ip": "5.188.118.53", "port": 7860},
+        {"name": "MAZER-2", "ip": "5.188.118.53", "port": 7855},
+        {"name": "MAZER-1", "ip": "5.188.118.53", "port": 7850},
+        {"name": "ihn1fi-2", "ip": "5.188.118.53", "port": 7845},
+        {"name": "ihn1fi-1", "ip": "5.188.118.53", "port": 7840},
+        {"name": "Baton-2", "ip": "5.188.118.53", "port": 7835},
+        {"name": "Baton-1", "ip": "5.188.118.53", "port": 7830},
+        {"name": "Tokie-2", "ip": "5.188.118.53", "port": 7825},
+        {"name": "Tokie-1", "ip": "5.188.118.53", "port": 7820},
+        {"name": "estranossa-2", "ip": "5.188.118.53", "port": 7815},
+        {"name": "estranossa-1", "ip": "5.188.118.53", "port": 7810},
+        {"name": "Test Server Core", "ip": "51.159.125.199", "port": 7777},
+        {"name": "like2bemike-2", "ip": "5.188.118.53", "port": 7880},
+        {"name": "like2bemike-1", "ip": "5.188.118.53", "port": 7885},
+        {"name": "slaughter-1", "ip": "5.188.118.53", "port": 7890},
+        {"name": "slaughter-2", "ip": "5.188.118.53", "port": 7895},
+        {"name": "donbeton-1", "ip": "5.188.118.53", "port": 7900},
+        {"name": "donbeton-2", "ip": "5.188.118.53", "port": 7905},
+    ],
+    "Work Test Server": [
+        {"name": "P1", "ip": "80.66.82.19", "port": 7010},
+        {"name": "P2", "ip": "80.66.82.19", "port": 7020},
+        {"name": "P3", "ip": "80.66.82.19", "port": 7030},
+        {"name": "P4", "ip": "80.66.82.19", "port": 7040},
+        {"name": "YouTube", "ip": "80.66.82.19", "port": 7090},
+        {"name": "stage-229", "ip": "80.66.82.150", "port": 5125},
+        {"name": "CBT-PR", "ip": "185.169.134.21", "port": 5125},
+        {"name": "CBT2-PR", "ip": "185.169.134.20", "port": 5125},
+    ],
+    "Local Test Server": [
+        {"name": "feature-update-wp2", "ip": "10.211.0.195", "port": 32204},
+        {"name": "feature-add-k8s-deploy", "ip": "10.211.3.89", "port": 32541},
+        {"name": "feature-season4-main", "ip": "10.211.3.160", "port": 32016},
+        {"name": "feature-notfix-sounds", "ip": "10.211.0.29", "port": 31342},
+        {"name": "feature-season3-main", "ip": "10.211.2.178", "port": 31191},
+        {"name": "office_perf", "ip": "10.3.0.132", "port": 5125},
+        {"name": "test-k8s-2", "ip": "10.211.2.178", "port": 31475},
+        {"name": "test-k8s-1", "ip": "10.211.0.81", "port": 30924},
+    ]
+}
+
 # Файл для хранения разрешенных пользователей
 ALLOWED_USERS_FILE = "allowed_users.json"
 
@@ -34,7 +85,6 @@ def load_allowed_users():
         with open(ALLOWED_USERS_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        # Если файла нет, создаем с админом по умолчанию
         default_users = [ADMIN_ID]
         save_allowed_users(default_users)
         return default_users
@@ -52,6 +102,11 @@ def save_allowed_users(users):
 
 # Загружаем разрешенных пользователей
 ALLOWED_USER_IDS = load_allowed_users()
+
+# Гарантируем, что админ есть в списке
+if ADMIN_ID not in ALLOWED_USER_IDS:
+    ALLOWED_USER_IDS.append(ADMIN_ID)
+    save_allowed_users(ALLOWED_USER_IDS)
 # ================================================
 
 logging.basicConfig(level=logging.INFO)
@@ -61,7 +116,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Храним предыдущее состояние серверов
-server_state = {}  # {server_id: {"name": name, "online": online, "ip": ip, "port": port}}
+server_state = {}
 
 
 async def fetch_servers():
@@ -87,7 +142,6 @@ async def check_and_notify():
         logger.warning("Нет данных от API")
         return
     
-    # Получаем текущее состояние
     current_state = {}
     for server in data:
         if isinstance(server, dict):
@@ -100,15 +154,12 @@ async def check_and_notify():
                     "port": server.get("port", "Неизвестно")
                 }
     
-    # Проверяем новые серверы, изменения и переименования
     for server_id, info in current_state.items():
         name = info["name"]
         current_online = info["online"]
         is_ignored = server_id in IGNORED_SERVERS
         
-        # === НОВЫЙ СЕРВЕР (если его не было в прошлом состоянии) ===
         if server_id not in server_state:
-            # Отправляем уведомление о новом сервере (даже если он в игноре)
             message = (
                 f"🆕 *Новый сервер!*\n"
                 f"📌 {name}\n"
@@ -117,9 +168,8 @@ async def check_and_notify():
             )
             await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
             logger.info(f"🆕 Новый сервер: {name} (ID: {server_id})")
-            continue  # Пропускаем уведомления о заходе/выходе для нового сервера
+            continue
         
-        # === ПРОВЕРКА ПЕРЕИМЕНОВАНИЯ (для всех серверов, даже игнорируемых) ===
         old_name = server_state[server_id]["name"]
         if old_name != name:
             message = (
@@ -129,11 +179,9 @@ async def check_and_notify():
             await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
             logger.info(f"✏️ Переименован сервер: {old_name} → {name} (ID: {server_id})")
         
-        # === ИГНОРИРУЕМЫЙ СЕРВЕР - пропускаем уведомления об онлайне ===
         if is_ignored:
             continue
         
-        # === ИЗМЕНЕНИЕ ОНЛАЙНА (только для НЕ игнорируемых) ===
         old_online = server_state[server_id]["online"]
         
         if current_online > old_online:
@@ -144,7 +192,6 @@ async def check_and_notify():
                 f"Текущий онлайн: {current_online}"
             )
             await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
-        
         elif current_online < old_online:
             diff = old_online - current_online
             message = (
@@ -154,7 +201,6 @@ async def check_and_notify():
             )
             await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
     
-    # Обновляем состояние
     server_state = current_state
 
 
@@ -163,7 +209,6 @@ async def monitor_loop():
     logger.info(f"🔄 Мониторинг запущен (интервал: {CHECK_INTERVAL} сек)")
     logger.info(f"🔇 Игнорируемых серверов: {len(IGNORED_SERVERS)}")
     
-    # Первый запуск - просто сохраняем состояние
     data = await fetch_servers()
     if data and isinstance(data, list):
         for server in data:
@@ -191,33 +236,81 @@ async def check_access(message: types.Message) -> bool:
     """Проверяет, есть ли у пользователя доступ к боту."""
     user_id = message.from_user.id
     
-    # Админ имеет доступ всегда
+    # Админ имеет доступ ВСЕГДА
     if user_id == ADMIN_ID:
         return True
     
-    # Проверяем в списке разрешенных
     if user_id in ALLOWED_USER_IDS:
         return True
     
-    await message.answer("🚫 У вас нет доступа к этому боту")
+    if message.chat.type == "private":
+        await message.answer("🚫 У вас нет доступа к этому боту")
+    else:
+        await message.answer("🚫 Доступ закрыт")
+    
     return False
 
 def is_admin(user_id: int) -> bool:
-    """Проверяет, является ли пользователь админом."""
     return user_id == ADMIN_ID
+# ============================================================
+
+
+# ============ ПИНГ СЕРВЕРА ============
+async def ping_server(ip, port, timeout=3):
+    """Проверка доступности сервера по TCP порту."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((ip, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+async def get_server_info(server_name):
+    """Найти сервер по имени."""
+    for category, servers in PING_SERVERS.items():
+        for server in servers:
+            if server["name"] == server_name:
+                return server
+    return None
+
+
+def get_ping_keyboard():
+    """Создать клавиатуру с серверами по категориям."""
+    builder = InlineKeyboardBuilder()
+    
+    # Сначала добавляем все серверы
+    for category, servers in PING_SERVERS.items():
+        # Добавляем заголовок категории (как кнопка, но неактивная)
+        # Используем кнопку с callback, который ничего не делает
+        for server in servers:
+            builder.button(
+                text=f"🖥️ {server['name']}",
+                callback_data=f"ping_{server['name']}"
+            )
+        # Добавляем разделитель после каждой категории
+        builder.button(text="─" * 20, callback_data="separator")
+    
+    # Добавляем кнопку обновить
+    builder.button(text="🔄 Обновить", callback_data="refresh_ping")
+    
+    # Настраиваем колонки (3 кнопки в ряду для компактности)
+    builder.adjust(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1)
+    
+    return builder.as_markup()
 # ============================================================
 
 
 # ============ КОМАНДЫ УПРАВЛЕНИЯ ДОСТУПОМ ============
 @dp.message(Command("access"))
 async def access_command(message: types.Message):
-    """Выдать доступ пользователю. Только в ЛС. /access @username или /access 123456789"""
-    # Проверяем, что это ЛС
+    """Выдать доступ пользователю. Только в ЛС."""
     if message.chat.type != "private":
         await message.answer("❌ Эта команда работает только в личных сообщениях")
         return
     
-    # Проверяем, что админ
     if not is_admin(message.from_user.id):
         await message.answer("❌ Только админ может выдавать доступ")
         return
@@ -234,18 +327,15 @@ async def access_command(message: types.Message):
     target = args[1]
     user_id = None
     
-    # Пробуем получить ID
     if target.startswith("@"):
-        # По юзернейму
         try:
             user = await bot.get_chat(target)
             user_id = user.id
             username = target
-        except Exception as e:
+        except Exception:
             await message.answer(f"❌ Не найден пользователь {target}")
             return
     else:
-        # По ID
         try:
             user_id = int(target)
             username = f"ID: {user_id}"
@@ -253,33 +343,27 @@ async def access_command(message: types.Message):
             await message.answer("❌ Неверный формат. Используйте @username или ID")
             return
     
-    # Проверяем, что не админ
     if user_id == ADMIN_ID:
-        await message.answer("❌ Нельзя выдать доступ админу (он и так имеет доступ)")
+        await message.answer("❌ Нельзя выдать доступ админу")
         return
     
-    # Проверяем, есть ли уже доступ
     if user_id in ALLOWED_USER_IDS:
         await message.answer(f"ℹ️ Пользователь {username} уже имеет доступ")
         return
     
-    # Добавляем доступ
     ALLOWED_USER_IDS.append(user_id)
     save_allowed_users(ALLOWED_USER_IDS)
     
     await message.answer(f"✅ Пользователь {username} получил доступ к боту")
-    logger.info(f"Админ {message.from_user.id} выдал доступ {username}")
 
 
 @dp.message(Command("unaccess"))
 async def unaccess_command(message: types.Message):
-    """Забрать доступ у пользователя. Только в ЛС. /unaccess @username или /unaccess 123456789"""
-    # Проверяем, что это ЛС
+    """Забрать доступ у пользователя. Только в ЛС."""
     if message.chat.type != "private":
         await message.answer("❌ Эта команда работает только в личных сообщениях")
         return
     
-    # Проверяем, что админ
     if not is_admin(message.from_user.id):
         await message.answer("❌ Только админ может забирать доступ")
         return
@@ -296,13 +380,12 @@ async def unaccess_command(message: types.Message):
     target = args[1]
     user_id = None
     
-    # Пробуем получить ID
     if target.startswith("@"):
         try:
             user = await bot.get_chat(target)
             user_id = user.id
             username = target
-        except Exception as e:
+        except Exception:
             await message.answer(f"❌ Не найден пользователь {target}")
             return
     else:
@@ -313,33 +396,27 @@ async def unaccess_command(message: types.Message):
             await message.answer("❌ Неверный формат. Используйте @username или ID")
             return
     
-    # Проверяем, что не админ
     if user_id == ADMIN_ID:
         await message.answer("❌ Нельзя забрать доступ у админа")
         return
     
-    # Проверяем, есть ли доступ
     if user_id not in ALLOWED_USER_IDS:
         await message.answer(f"ℹ️ Пользователь {username} не имеет доступа")
         return
     
-    # Убираем доступ
     ALLOWED_USER_IDS.remove(user_id)
     save_allowed_users(ALLOWED_USER_IDS)
     
     await message.answer(f"✅ У пользователя {username} забран доступ к боту")
-    logger.info(f"Админ {message.from_user.id} забрал доступ у {username}")
 
 
 @dp.message(Command("users"))
 async def users_command(message: types.Message):
     """Показать список пользователей с доступом. Только в ЛС."""
-    # Проверяем, что это ЛС
     if message.chat.type != "private":
         await message.answer("❌ Эта команда работает только в личных сообщениях")
         return
     
-    # Проверяем, что админ
     if not is_admin(message.from_user.id):
         await message.answer("❌ Только админ может просматривать список")
         return
@@ -365,12 +442,11 @@ async def users_command(message: types.Message):
             lines.append(f"• ID: `{uid}`")
     
     await message.answer("\n".join(lines), parse_mode="Markdown")
-# ============================================================
 
 
+# ============ КОМАНДЫ БОТА ============
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    """Команда /start для личного чата."""
     if not await check_access(message):
         return
     
@@ -379,14 +455,14 @@ async def start_command(message: types.Message):
         "Бот отслеживает изменения онлайна и отправляет уведомления в канал.\n\n"
         f"📌 Интервал проверки: {CHECK_INTERVAL} секунд\n"
         f"🔇 Игнорируется серверов: {len(IGNORED_SERVERS)}\n"
-        f"📢 Уведомления приходят в этот канал",
+        f"📢 Уведомления приходят в этот канал\n\n"
+        "📡 /ping — Проверить доступность серверов",
         parse_mode="Markdown"
     )
 
 
 @dp.message(Command("status"))
 async def status_command(message: types.Message):
-    """Показать текущий статус серверов."""
     if not await check_access(message):
         return
     
@@ -396,7 +472,6 @@ async def status_command(message: types.Message):
         await message.answer("❌ Нет данных")
         return
     
-    # Сортируем по ID
     sorted_servers = sorted(
         data,
         key=lambda x: x.get("id", 0) if isinstance(x, dict) else 0
@@ -409,7 +484,6 @@ async def status_command(message: types.Message):
             online = server.get("online", "0")
             server_id = server.get("id", "?")
             
-            # Отмечаем игнорируемые серверы
             if server_id in IGNORED_SERVERS:
                 lines.append(f"🔇 {name} — {online} (игнорируется)")
             else:
@@ -427,7 +501,6 @@ async def status_command(message: types.Message):
 
 @dp.message(Command("refresh"))
 async def refresh_command(message: types.Message):
-    """Принудительное обновление состояния."""
     if not await check_access(message):
         return
     
@@ -439,7 +512,6 @@ async def refresh_command(message: types.Message):
         await message.answer("❌ Нет данных")
         return
     
-    # Обновляем состояние
     new_state = {}
     for server in data:
         if isinstance(server, dict):
@@ -458,7 +530,6 @@ async def refresh_command(message: types.Message):
 
 @dp.message(Command("ignored"))
 async def ignored_command(message: types.Message):
-    """Показать список игнорируемых серверов."""
     if not await check_access(message):
         return
     
@@ -466,7 +537,6 @@ async def ignored_command(message: types.Message):
         await message.answer("🔇 Нет игнорируемых серверов")
         return
     
-    # Получаем данные, чтобы показать названия
     data = await fetch_servers()
     
     lines = ["🔇 *Игнорируемые серверы:*\n"]
@@ -489,9 +559,23 @@ async def ignored_command(message: types.Message):
     await message.answer("\n".join(lines), parse_mode="Markdown")
 
 
+@dp.message(Command("ping"))
+async def ping_menu_command(message: types.Message):
+    """Показать меню с серверами для пинга."""
+    if not await check_access(message):
+        return
+    
+    keyboard = get_ping_keyboard()
+    await message.answer(
+        "📡 *Выберите сервер для пинга:*\n\n"
+        "Нажмите на кнопку с названием сервера",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+
 @dp.message(Command("help"))
 async def help_command(message: types.Message):
-    """Список команд."""
     if not await check_access(message):
         return
     
@@ -503,10 +587,10 @@ async def help_command(message: types.Message):
         "/status — Онлайн всех серверов",
         "/refresh — Обновить состояние",
         "/ignored — Список игнорируемых серверов",
+        "/ping — Проверить доступность серверов",
         "/help — Список команд"
     ]
     
-    # Админские команды (только в ЛС)
     if is_admin_user:
         commands.extend([
             "",
@@ -519,79 +603,68 @@ async def help_command(message: types.Message):
     await message.answer("\n".join(commands), parse_mode="Markdown")
 
 
-@dp.message(Command("ping"))
-async def ping_command(message: types.Message):
-    """Проверить доступность сервера: /ping 123"""
-    if not await check_access(message):
+# ============ ОБРАБОТЧИК КНОПОК ============
+@dp.callback_query()
+async def handle_callback(callback: types.CallbackQuery):
+    """Обработка нажатий на кнопки."""
+    data = callback.data
+    
+    # Разделитель - ничего не делаем
+    if data == "separator":
+        await callback.answer()
         return
     
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("❌ Использование: /ping <ID_сервера>")
+    # Обновить список
+    if data == "refresh_ping":
+        keyboard = get_ping_keyboard()
+        await callback.message.edit_text(
+            "📡 *Выберите сервер для пинга:*\n\n"
+            "Нажмите на кнопку с названием сервера",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+        await callback.answer("🔄 Список обновлен")
         return
     
-    try:
-        server_id = int(args[1])
-    except ValueError:
-        await message.answer("❌ ID должен быть числом")
-        return
-    
-    # Ищем сервер
-    data = await fetch_servers()
-    if not data:
-        await message.answer("❌ Нет данных от API")
-        return
-    
-    server = next((s for s in data if s.get("id") == server_id), None)
-    if not server:
-        await message.answer(f"❌ Сервер с ID {server_id} не найден")
-        return
-    
-    name = server.get("name", "Без имени")
-    ip = server.get("ip")
-    port = server.get("port")
-    
-    if not ip:
-        await message.answer(f"❌ У сервера {name} нет IP")
-        return
-    
-    # Проверяем
-    status_msg = await message.answer(f"🔍 Пингую {name}...")
-    
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(3)
-        result = sock.connect_ex((ip, port if port else 80))
-        sock.close()
+    # Пинг сервера
+    if data.startswith("ping_"):
+        server_name = data.replace("ping_", "")
+        server_info = await get_server_info(server_name)
         
-        if result == 0:
-            status = "✅ ДОСТУПЕН"
-        else:
-            status = "❌ НЕДОСТУПЕН"
-    except Exception:
-        status = "❌ ОШИБКА"
-    
-    response = (
-        f"📡 *Результат пинга*\n"
-        f"📌 {name}\n"
-        f"🌐 {ip}"
-    )
-    if port:
-        response += f":{port}"
-    response += f"\n\n{status}"
-    
-    await status_msg.edit_text(response, parse_mode="Markdown")
+        if not server_info:
+            await callback.answer("❌ Сервер не найден")
+            return
+        
+        # Отправляем статус
+        await callback.answer(f"🔍 Пингую {server_name}...")
+        
+        # Проверяем доступность
+        is_online = await ping_server(server_info["ip"], server_info["port"])
+        
+        status = "✅ ДОСТУПЕН" if is_online else "❌ НЕДОСТУПЕН"
+        emoji = "🟢" if is_online else "🔴"
+        
+        # Отправляем результат
+        result_message = (
+            f"{emoji} *Результат пинга*\n\n"
+            f"📌 {server_name}\n"
+            f"🌐 {server_info['ip']}:{server_info['port']}\n\n"
+            f"**{status}**"
+        )
+        
+        # Отправляем новым сообщением, чтобы не терять меню
+        await callback.message.answer(result_message, parse_mode="Markdown")
+        
+        # Показываем уведомление
+        await callback.answer(f"✅ {server_name}: {status}")
 
 
 # ============ ОБРАБОТЧИК ДЛЯ ЛИЧНЫХ СООБЩЕНИЙ ============
 @dp.message()
 async def private_message_handler(message: types.Message):
-    """Обработка любых сообщений в личке."""
     if message.chat.type == "private":
-        # Если у пользователя нет доступа
         if not await check_access(message):
             return
-        # Если есть доступ, но команда не распознана
         await message.answer(
             "❓ Неизвестная команда\n"
             "Используйте /help для списка команд"
@@ -609,12 +682,10 @@ async def main():
     print(f"⏱️  Интервал: {CHECK_INTERVAL} сек")
     print(f"🔇 Игнорируется: {len(IGNORED_SERVERS)} серверов")
     print(f"👥 Пользователей с доступом: {len(ALLOWED_USER_IDS)}")
+    print(f"📡 Серверов для пинга: {sum(len(s) for s in PING_SERVERS.values())}")
     print("=" * 50)
     
-    # Запускаем мониторинг в фоне
     asyncio.create_task(monitor_loop())
-    
-    # Запускаем бота
     await dp.start_polling(bot)
 
 
