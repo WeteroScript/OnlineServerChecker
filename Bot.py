@@ -33,7 +33,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Храним предыдущее состояние серверов
-server_state = {}  # {server_id: {"name": name, "online": online}}
+server_state = {}  # {server_id: {"name": name, "online": online, "ip": ip, "port": port}}
 
 
 async def fetch_servers():
@@ -72,7 +72,7 @@ async def check_and_notify():
                     "port": server.get("port", "Неизвестно")
                 }
     
-    # Проверяем новые серверы и изменения
+    # Проверяем новые серверы, изменения и переименования
     for server_id, info in current_state.items():
         name = info["name"]
         current_online = info["online"]
@@ -91,7 +91,17 @@ async def check_and_notify():
             logger.info(f"🆕 Новый сервер: {name} (ID: {server_id})")
             continue  # Пропускаем уведомления о заходе/выходе для нового сервера
         
-        # === ИГНОРИРУЕМЫЙ СЕРВЕР - пропускаем уведомления ===
+        # === ПРОВЕРКА ПЕРЕИМЕНОВАНИЯ (для всех серверов, даже игнорируемых) ===
+        old_name = server_state[server_id]["name"]
+        if old_name != name:
+            message = (
+                f"✏️ *Переименован сервер!*\n"
+                f"📌 {old_name} → {name}"
+            )
+            await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
+            logger.info(f"✏️ Переименован сервер: {old_name} → {name} (ID: {server_id})")
+        
+        # === ИГНОРИРУЕМЫЙ СЕРВЕР - пропускаем уведомления об онлайне ===
         if is_ignored:
             continue
         
