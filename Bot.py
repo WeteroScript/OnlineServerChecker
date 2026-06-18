@@ -10,7 +10,7 @@ from aiogram.filters import Command
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 15  # Секунд (15 секунд)
+CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
 
 # 🔇 Серверы, которые НЕ нужно отслеживать (по ID)
 IGNORED_SERVERS = [
@@ -19,9 +19,10 @@ IGNORED_SERVERS = [
     220, 221, 222, 223, 224, 225, 226
 ]
 
-# ✅ Разрешенные ID чатов
+# ✅ Разрешенные ID чатов (только эти каналы могут использовать бота)
 ALLOWED_CHAT_IDS = [
-    -1003909198412,  # ID твоего канала
+    -1003909198412,  # ID твоего канала (замени на свой)
+    # Можешь добавить другие каналы через запятую
 ]
 # ================================================
 
@@ -33,9 +34,6 @@ dp = Dispatcher()
 
 # Храним предыдущее состояние серверов
 server_state = {}  # {server_id: {"name": name, "online": online}}
-
-# ✅ Храним последнее отправленное уведомление для каждого сервера
-last_notification = {}  # {server_id: {"online": число, "time": время}}
 
 
 async def fetch_servers():
@@ -53,7 +51,7 @@ async def fetch_servers():
 
 async def check_and_notify():
     """Проверка изменений онлайна и отправка уведомлений."""
-    global server_state, last_notification
+    global server_state
     
     data = await fetch_servers()
     
@@ -74,21 +72,15 @@ async def check_and_notify():
                     "port": server.get("port", "Неизвестно")
                 }
     
-    # === ПРОВЕРКА УДАЛЕННЫХ СЕРВЕРОВ ===
-    for server_id, old_info in server_state.items():
-        if server_id not in current_state:
-            name = old_info.get("name", "Неизвестный сервер")
-            message = f"🥀 *{name}*\nСервер удален"
-            await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
-            logger.info(f"🥀 Сервер удален: {name} (ID: {server_id})")
-            # Удаляем из последних уведомлений
-            if server_id in last_notification:
-                del last_notification[server_id]
-    
-    # === ПРОВЕРКА НОВЫХ СЕРВЕРОВ ===
+    # Проверяем новые серверы и изменения
     for server_id, info in current_state.items():
+        name = info["name"]
+        current_online = info["online"]
+        is_ignored = server_id in IGNORED_SERVERS
+        
+        # === НОВЫЙ СЕРВЕР (если его не было в прошлом состоянии) ===
         if server_id not in server_state:
-            name = info["name"]
+            # Отправляем уведомление о новом сервере (даже если он в игноре)
             message = (
                 f"🆕 *Новый сервер!*\n"
                 f"📌 {name}\n"
@@ -97,58 +89,32 @@ async def check_and_notify():
             )
             await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
             logger.info(f"🆕 Новый сервер: {name} (ID: {server_id})")
-            # Запоминаем, что уведомление отправлено
-            last_notification[server_id] = {"online": info["online"], "time": datetime.now()}
-    
-    # === ПРОВЕРКА ИЗМЕНЕНИЙ ОНЛАЙНА (только для НЕ игнорируемых) ===
-    for server_id, info in current_state.items():
-        name = info["name"]
-        current_online = info["online"]
-        is_ignored = server_id in IGNORED_SERVERS
+            continue  # Пропускаем уведомления о заходе/выходе для нового сервера
         
-        # Пропускаем игнорируемые
+        # === ИГНОРИРУЕМЫЙ СЕРВЕР - пропускаем уведомления ===
         if is_ignored:
             continue
         
-        # Пропускаем, если сервер новый (уже обработали выше)
-        if server_id not in server_state:
-            continue
-        
+        # === ИЗМЕНЕНИЕ ОНЛАЙНА (только для НЕ игнорируемых) ===
         old_online = server_state[server_id]["online"]
         
-        # === ЕСЛИ ОНЛАЙН ИЗМЕНИЛСЯ ===
-        if current_online != old_online:
-            # ✅ Проверяем, не отправляли ли уже уведомление об этом изменении
-            if server_id in last_notification:
-                last = last_notification[server_id]
-                # Если онлайн совпадает с последним отправленным — пропускаем
-                if last["online"] == current_online:
-                    continue
-                # Если прошло меньше 2 минут с последнего уведомления — пропускаем
-                if datetime.now() - last["time"] < timedelta(minutes=2):
-                    continue
-            
-            # Отправляем уведомление
-            if current_online > old_online:
-                diff = current_online - old_online
-                message = (
-                    f"🟢 *{name}*\n"
-                    f"Зашел игрок! (+{diff})\n"
-                    f"Текущий онлайн: {current_online}"
-                )
-            else:
-                diff = old_online - current_online
-                message = (
-                    f"🔴 *{name}*\n"
-                    f"Вышел игрок! (-{diff})\n"
-                    f"Текущий онлайн: {current_online}"
-                )
-            
+        if current_online > old_online:
+            diff = current_online - old_online
+            message = (
+                f"🟢 *{name}*\n"
+                f"Зашел игрок! (+{diff})\n"
+                f"Текущий онлайн: {current_online}"
+            )
             await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
-            logger.info(f"📢 Уведомление: {name} — {current_online} (было {old_online})")
-            
-            # Запоминаем, что уведомление отправлено
-            last_notification[server_id] = {"online": current_online, "time": datetime.now()}
+        
+        elif current_online < old_online:
+            diff = old_online - current_online
+            message = (
+                f"🔴 *{name}*\n"
+                f"Вышел игрок! (-{diff})\n"
+                f"Текущий онлайн: {current_online}"
+            )
+            await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
     
     # Обновляем состояние
     server_state = current_state
@@ -182,29 +148,35 @@ async def monitor_loop():
             logger.error(f"Ошибка в мониторинге: {e}")
 
 
-# ============ ПРОВЕРКА ДОСТУПА ============
+# ============ ПРОВЕРКА ДОСТУПА (для всех команд) ============
 async def check_access(message: types.Message) -> bool:
+    """Проверяет, разрешен ли чат для использования бота."""
     if message.chat.id not in ALLOWED_CHAT_IDS:
         await message.answer("🚫 Доступ закрыт")
         return False
     return True
+# ============================================================
 
 
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
+    """Команда /start для личного чата."""
     if not await check_access(message):
         return
     
     await message.answer(
         "🤖 *Бот мониторинга серверов*\n\n"
+        "Бот отслеживает изменения онлайна и отправляет уведомления в канал.\n\n"
         f"📌 Интервал проверки: {CHECK_INTERVAL} секунд\n"
-        f"🔇 Игнорируется серверов: {len(IGNORED_SERVERS)}",
+        f"🔇 Игнорируется серверов: {len(IGNORED_SERVERS)}\n"
+        f"📢 Уведомления приходят в этот канал",
         parse_mode="Markdown"
     )
 
 
 @dp.message(Command("status"))
 async def status_command(message: types.Message):
+    """Показать текущий статус серверов."""
     if not await check_access(message):
         return
     
@@ -214,6 +186,7 @@ async def status_command(message: types.Message):
         await message.answer("❌ Нет данных")
         return
     
+    # Сортируем по ID
     sorted_servers = sorted(
         data,
         key=lambda x: x.get("id", 0) if isinstance(x, dict) else 0
@@ -226,6 +199,7 @@ async def status_command(message: types.Message):
             online = server.get("online", "0")
             server_id = server.get("id", "?")
             
+            # Отмечаем игнорируемые серверы
             if server_id in IGNORED_SERVERS:
                 lines.append(f"🔇 {name} — {online} (игнорируется)")
             else:
@@ -243,10 +217,11 @@ async def status_command(message: types.Message):
 
 @dp.message(Command("refresh"))
 async def refresh_command(message: types.Message):
+    """Принудительное обновление состояния."""
     if not await check_access(message):
         return
     
-    global server_state, last_notification
+    global server_state
     
     data = await fetch_servers()
     
@@ -254,6 +229,7 @@ async def refresh_command(message: types.Message):
         await message.answer("❌ Нет данных")
         return
     
+    # Обновляем состояние
     new_state = {}
     for server in data:
         if isinstance(server, dict):
@@ -267,56 +243,12 @@ async def refresh_command(message: types.Message):
                 }
     
     server_state = new_state
-    last_notification = {}  # Очищаем историю уведомлений
     await message.answer(f"✅ Состояние обновлено ({len(server_state)} серверов)")
-
-
-@dp.message(Command("sync"))
-async def sync_command(message: types.Message):
-    if not await check_access(message):
-        return
-    
-    await message.answer("🔄 Выполняю полную синхронизацию...")
-    
-    global server_state, last_notification
-    old_state = server_state.copy()
-    server_state = {}
-    last_notification = {}
-    
-    data = await fetch_servers()
-    if not data or not isinstance(data, list):
-        server_state = old_state
-        await message.answer("❌ Ошибка: не удалось получить данные")
-        return
-    
-    new_servers_found = 0
-    for server in data:
-        if isinstance(server, dict):
-            server_id = server.get("id")
-            if server_id:
-                if server_id not in old_state:
-                    new_servers_found += 1
-                    name = server.get("name", "Без имени")
-                    msg = (
-                        f"🆕 *Новый сервер!*\n"
-                        f"📌 {name}\n"
-                        f"🌐 IP: {server.get('ip', 'Неизвестно')}\n"
-                        f"🔌 Port: {server.get('port', 'Неизвестно')}"
-                    )
-                    await bot.send_message(CHANNEL_ID, msg, parse_mode="Markdown")
-                
-                server_state[server_id] = {
-                    "name": server.get("name", "Без имени"),
-                    "online": int(server.get("online", 0)),
-                    "ip": server.get("ip", "Неизвестно"),
-                    "port": server.get("port", "Неизвестно")
-                }
-    
-    await message.answer(f"✅ Синхронизация завершена!\nНайдено новых серверов: {new_servers_found}")
 
 
 @dp.message(Command("ignored"))
 async def ignored_command(message: types.Message):
+    """Показать список игнорируемых серверов."""
     if not await check_access(message):
         return
     
@@ -324,6 +256,7 @@ async def ignored_command(message: types.Message):
         await message.answer("🔇 Нет игнорируемых серверов")
         return
     
+    # Получаем данные, чтобы показать названия
     data = await fetch_servers()
     
     lines = ["🔇 *Игнорируемые серверы:*\n"]
@@ -348,37 +281,46 @@ async def ignored_command(message: types.Message):
 
 @dp.message(Command("help"))
 async def help_command(message: types.Message):
+    """Список команд."""
     if not await check_access(message):
         return
     
     await message.answer(
-        "🤖 *Команды:*\n\n"
-        "/start — Информация\n"
+        "🤖 *Доступные команды:*\n\n"
+        "/start — Информация о боте\n"
         "/status — Онлайн всех серверов\n"
         "/refresh — Обновить состояние\n"
-        "/sync — Полная синхронизация\n"
-        "/ignored — Список игнорируемых\n"
-        "/help — Помощь",
+        "/ignored — Список игнорируемых серверов\n"
+        "/help — Список команд",
         parse_mode="Markdown"
     )
 
 
+# ============ ОБРАБОТЧИК ДЛЯ ЛИЧНЫХ СООБЩЕНИЙ ============
 @dp.message()
 async def private_message_handler(message: types.Message):
+    """Обработка любых сообщений в личке."""
+    # Если это личный чат (не канал и не группа)
     if message.chat.type == "private":
         await message.answer("🚫 Доступ закрыт")
+# ============================================================
 
 
 async def main():
+    """Запуск бота."""
     print("=" * 50)
     print("🤖 БОТ МОНИТОРИНГА СЕРВЕРОВ")
     print("=" * 50)
     print(f"📢 Канал: {CHANNEL_ID}")
     print(f"⏱️  Интервал: {CHECK_INTERVAL} сек")
     print(f"🔇 Игнорируется: {len(IGNORED_SERVERS)} серверов")
+    print(f"✅ Разрешено каналов: {len(ALLOWED_CHAT_IDS)}")
     print("=" * 50)
     
+    # Запускаем мониторинг в фоне
     asyncio.create_task(monitor_loop())
+    
+    # Запускаем бота
     await dp.start_polling(bot)
 
 
