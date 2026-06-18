@@ -14,7 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 15  # Секунд (1:30 минуты)
+CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
 
 # 👑 АДМИН
 ADMIN_ID = 5877790074
@@ -272,7 +272,7 @@ def get_ping_keyboard():
         for server in servers:
             builder.button(
                 text=f"🖥️ {server['name']}",
-                callback_data=f"ping_{server['name']}"
+                url=f"http://{server['ip']}"  # Сразу открываем IP
             )
         builder.button(text="─" * 20, callback_data="separator")
     
@@ -423,6 +423,65 @@ async def users_command(message: types.Message):
     await message.answer("\n".join(lines), parse_mode="Markdown")
 
 
+# ============ КОМАНДА /ip ============
+@dp.message(Command("ip"))
+async def ip_command(message: types.Message):
+    """Получить IP и порт сервера по ID: /ip 205"""
+    if not await check_access(message):
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("❌ Использование: /ip <ID_сервера>\nПример: /ip 205")
+        return
+    
+    try:
+        server_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID должен быть числом")
+        return
+    
+    # Получаем данные из API
+    data = await fetch_servers()
+    
+    if not data or not isinstance(data, list):
+        await message.answer("❌ Нет данных от API")
+        return
+    
+    # Ищем сервер по ID
+    server = None
+    for s in data:
+        if isinstance(s, dict) and s.get("id") == server_id:
+            server = s
+            break
+    
+    if not server:
+        await message.answer(f"❌ Сервер с ID {server_id} не найден")
+        return
+    
+    name = server.get("name", "Без имени")
+    ip = server.get("ip", "Неизвестно")
+    port = server.get("port", "Неизвестно")
+    
+    # Формируем ответ
+    if ip != "Неизвестно" and port != "Неизвестно":
+        response = (
+            f"🖥️ *{name}*\n"
+            f"🆔 ID: `{server_id}`\n"
+            f"🌐 IP: `{ip}`\n"
+            f"🔌 Port: `{port}`\n\n"
+            f"📌 `{ip}:{port}`"
+        )
+    else:
+        response = (
+            f"🖥️ *{name}*\n"
+            f"🆔 ID: `{server_id}`\n"
+            f"❌ Данные отсутствуют"
+        )
+    
+    await message.answer(response, parse_mode="Markdown")
+
+
 # ============ КОМАНДЫ БОТА ============
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
@@ -433,9 +492,9 @@ async def start_command(message: types.Message):
         "🤖 *Бот мониторинга серверов*\n\n"
         "Бот отслеживает изменения онлайна и отправляет уведомления в канал.\n\n"
         f"📌 Интервал проверки: {CHECK_INTERVAL} секунд\n"
-        f"🔇 Игнорируется серверов: {len(IGNORED_SERVERS)}\n"
         f"📢 Уведомления приходят в этот канал\n\n"
-        "📡 /ping — Проверить доступность серверов",
+        "📡 /ping — Список серверов для подключения\n"
+        "🔍 /ip <ID> — Получить IP и порт сервера",
         parse_mode="Markdown"
     )
 
@@ -507,37 +566,6 @@ async def refresh_command(message: types.Message):
     await message.answer(f"✅ Состояние обновлено ({len(server_state)} серверов)")
 
 
-@dp.message(Command("ignored"))
-async def ignored_command(message: types.Message):
-    if not await check_access(message):
-        return
-    
-    if not IGNORED_SERVERS:
-        await message.answer("🔇 Нет игнорируемых серверов")
-        return
-    
-    data = await fetch_servers()
-    
-    lines = ["🔇 *Игнорируемые серверы:*\n"]
-    
-    if data and isinstance(data, list):
-        server_names = {}
-        for server in data:
-            if isinstance(server, dict):
-                server_id = server.get("id")
-                if server_id in IGNORED_SERVERS:
-                    server_names[server_id] = server.get("name", "Без имени")
-        
-        for server_id in sorted(IGNORED_SERVERS):
-            name = server_names.get(server_id, "Неизвестно")
-            lines.append(f"• ID: `{server_id}` — {name}")
-    else:
-        for server_id in sorted(IGNORED_SERVERS):
-            lines.append(f"• ID: `{server_id}`")
-    
-    await message.answer("\n".join(lines), parse_mode="Markdown")
-
-
 @dp.message(Command("ping"))
 async def ping_menu_command(message: types.Message):
     """Показать меню с серверами для пинга."""
@@ -565,8 +593,8 @@ async def help_command(message: types.Message):
         "/start — Информация о боте",
         "/status — Онлайн всех серверов",
         "/refresh — Обновить состояние",
-        "/ignored — Список игнорируемых серверов",
         "/ping — Список серверов для подключения",
+        "/ip <ID> — Получить IP и порт сервера",
         "/help — Список команд"
     ]
     
@@ -601,34 +629,6 @@ async def handle_callback(callback: types.CallbackQuery):
             reply_markup=keyboard
         )
         await callback.answer("🔄 Обновлено")
-        return
-    
-    if data.startswith("ping_"):
-        server_name = data.replace("ping_", "")
-        server_info = await get_server_info(server_name)
-        
-        if not server_info:
-            await callback.answer("❌ Сервер не найден")
-            return
-        
-        ip = server_info["ip"]
-        
-        # Кнопка для перехода по IP
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="🌐 Перейти",
-                url=f"http://{ip}"
-            )]
-        ])
-        
-        await callback.message.answer(
-            f"🌐 *{server_name}*\n\n"
-            f"📍 `{ip}`\n\n"
-            f"Нажмите кнопку, чтобы перейти",
-            parse_mode="Markdown",
-            reply_markup=keyboard
-        )
-        await callback.answer(f"🌐 {ip}")
 
 
 # ============ ОБРАБОТЧИК ДЛЯ ЛИЧНЫХ СООБЩЕНИЙ ============
