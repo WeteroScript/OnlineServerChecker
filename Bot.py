@@ -10,7 +10,7 @@ from aiogram.filters import Command
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
+CHECK_INTERVAL = 10  # Секунд (1:30 минуты)
 
 # 🔇 Серверы, которые НЕ нужно отслеживать (по ID)
 IGNORED_SERVERS = [
