@@ -16,7 +16,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 YOUTUBERS_API_URL = "https://api.blackrussia.online/client/listOfYoutubers.json"
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003909198412")
-CHECK_INTERVAL = 90  # Секунд (1:30 минуты)
+CHECK_INTERVAL = 15  # Секунд (1:30 минуты)
 
 # 👑 АДМИН
 ADMIN_ID = 5877790074
