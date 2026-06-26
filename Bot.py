@@ -1,6 +1,7 @@
 import os
 import json
 import html
+import time
 import aiohttp
 import asyncio
 import logging
@@ -31,8 +32,14 @@ HIDDEN_FROM_STATUS = set(range(1, 92))  # ID с 1 по 91
 # Файл для хранения разрешенных пользователей
 ALLOWED_USERS_FILE = "allowed_users.json"
 
+# Файл для хранения максимального онлайна по серверам
+MAX_ONLINE_FILE = "max_online.json"
+
 # Файл-выгрузка для /youtube
 YOUTUBE_EXPORT_FILENAME = "youtubenickTestServerConnect.json"
+
+# Кулдаун на команду /status (в секундах) — общий для всех пользователей
+STATUS_COOLDOWN = 90
 
 
 def load_allowed_users():
@@ -58,11 +65,35 @@ def save_allowed_users(users):
         logging.error(f"Ошибка сохранения allowed_users: {e}")
 
 
+def load_max_online():
+    """Загрузить сохраненные максимальные онлайны серверов."""
+    try:
+        with open(MAX_ONLINE_FILE, "r") as f:
+            data = json.load(f)
+            return {int(k): int(v) for k, v in data.items()}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logging.error(f"Ошибка загрузки max_online: {e}")
+        return {}
+
+
+def save_max_online(data):
+    """Сохранить максимальные онлайны серверов в файл."""
+    try:
+        with open(MAX_ONLINE_FILE, "w") as f:
+            json.dump({str(k): v for k, v in data.items()}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"Ошибка сохранения max_online: {e}")
+
+
 ALLOWED_USER_IDS = load_allowed_users()
 
 if ADMIN_ID not in ALLOWED_USER_IDS:
     ALLOWED_USER_IDS.append(ADMIN_ID)
     save_allowed_users(ALLOWED_USER_IDS)
+
+MAX_ONLINE_STATE = load_max_online()
 # ================================================
 
 logging.basicConfig(
@@ -79,6 +110,9 @@ server_state = {}
 youtubers_state = set()
 # Сохраняем последние данные YouTubers (для /youtube), чтобы не делать лишний запрос
 last_youtubers_data = []
+
+# Время последнего успешного вызова /status (общий кулдаун для всех)
+last_status_call = 0.0
 
 
 async def fetch_json(url, description="API"):
@@ -107,6 +141,16 @@ async def fetch_servers():
 async def fetch_youtubers():
     """Получение списка YouTubers из API."""
     return await fetch_json(YOUTUBERS_API_URL, "YouTubers API")
+
+
+def update_max_online(server_id, online):
+    """Обновить максимальный зафиксированный онлайн сервера, если нужно."""
+    global MAX_ONLINE_STATE
+
+    old_max = MAX_ONLINE_STATE.get(server_id, 0)
+    if online > old_max:
+        MAX_ONLINE_STATE[server_id] = online
+        save_max_online(MAX_ONLINE_STATE)
 
 
 async def check_youtubers():
@@ -185,10 +229,12 @@ async def check_servers():
         if isinstance(server, dict):
             server_id = server.get("id")
             if server_id:
+                online_value = int(server.get("online", 0))
                 current_state[server_id] = {
                     "name": server.get("name", "Без имени"),
-                    "online": int(server.get("online", 0)),
+                    "online": online_value,
                 }
+                update_max_online(server_id, online_value)
 
     if not server_state:
         server_state = current_state
@@ -365,7 +411,7 @@ async def access_command(message: types.Message):
         return
 
     if user_id in ALLOWED_USER_IDS:
-        await message.answer(f"ℹ️ Пользователь {username} уже имеет доступ")
+        await message.answer(f"i️ Пользователь {username} уже имеет доступ")
         return
 
     ALLOWED_USER_IDS.append(user_id)
@@ -417,7 +463,7 @@ async def unaccess_command(message: types.Message):
         return
 
     if user_id not in ALLOWED_USER_IDS:
-        await message.answer(f"ℹ️ Пользователь {username} не имеет доступа")
+        await message.answer(f"i️ Пользователь {username} не имеет доступа")
         return
 
     ALLOWED_USER_IDS.remove(user_id)
@@ -502,7 +548,6 @@ def build_full_commands_text() -> str:
         "/status — Онлайн серверов (работает в любом чате)",
         "/refresh — Обновить состояние",
         "/youtube — Выгрузить файл со всеми никами YouTubers",
-        "/help — Список команд",
         "",
         "👑 *Команды администратора (только в ЛС):*",
         "/access @user/id — Выдать доступ",
@@ -523,29 +568,36 @@ async def start_command(message: types.Message):
     await message.answer(build_full_commands_text(), parse_mode="Markdown")
 
 
-@dp.message(Command("help"))
-async def help_command(message: types.Message):
-    if not is_private(message):
-        return
-
-    if not await check_access(message):
-        return
-
-    await message.answer(build_full_commands_text(), parse_mode="Markdown")
-
-
 @dp.message(Command("status"))
 async def status_command(message: types.Message):
     """
     /status работает в ЛЮБОМ чате, даже без доступа.
-    Без эмодзи, одним сообщением, в виде цитирования.
+    Общий кулдаун STATUS_COOLDOWN секунд на всех пользователей.
+    Формат строки: Название сервера. Максимальный онлайн/текущий онлайн.
     Серверы с ID 1–91 не показываются.
     """
+    global last_status_call
+
+    now = time.time()
+    elapsed = now - last_status_call
+
+    if elapsed < STATUS_COOLDOWN:
+        remaining = int(STATUS_COOLDOWN - elapsed)
+        minutes = remaining // 60
+        seconds = remaining % 60
+        await message.answer(
+            f"⏳ Команда на кулдауне. Попробуйте через {minutes} мин {seconds} сек."
+        )
+        return
+
     data = await fetch_servers()
 
     if not data or not isinstance(data, list):
         await message.answer("Нет данных")
         return
+
+    # Кулдаун засчитывается только при успешном выполнении команды
+    last_status_call = now
 
     sorted_servers = sorted(
         data,
@@ -563,7 +615,11 @@ async def status_command(message: types.Message):
 
         name = server.get("name", "???")
         online = int(server.get("online", 0))
-        lines.append(f"{html.escape(str(name))} — {online}")
+
+        update_max_online(server_id, online)
+        max_online = MAX_ONLINE_STATE.get(server_id, online)
+
+        lines.append(f"{html.escape(str(name))}. {max_online}/{online}")
 
     if not lines:
         await message.answer("Нет данных для отображения")
@@ -630,7 +686,7 @@ async def private_message_handler(message: types.Message):
 
     await message.answer(
         "❓ Неизвестная команда\n"
-        "Используйте /help для списка команд"
+        "Используйте /start для списка команд"
     )
 # ============================================================
 
@@ -646,6 +702,7 @@ async def main():
     print(f"🔇 Игнорируется (нотификации): {len(IGNORED_SERVERS)}")
     print(f"🙈 Скрыто в /status: ID 1–91")
     print(f"👥 Пользователей с доступом: {len(ALLOWED_USER_IDS)}")
+    print(f"🕐 Кулдаун /status: {STATUS_COOLDOWN} сек")
     print("=" * 50)
 
     asyncio.create_task(monitor_loop())
