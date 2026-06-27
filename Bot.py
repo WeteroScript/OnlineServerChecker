@@ -43,7 +43,6 @@ STATUS_COOLDOWN = 90
 
 
 def load_allowed_users():
-    """Загрузить список разрешенных пользователей из файла."""
     try:
         with open(ALLOWED_USERS_FILE, "r") as f:
             return json.load(f)
@@ -57,7 +56,6 @@ def load_allowed_users():
 
 
 def save_allowed_users(users):
-    """Сохранить список разрешенных пользователей в файл."""
     try:
         with open(ALLOWED_USERS_FILE, "w") as f:
             json.dump(users, f, ensure_ascii=False, indent=2)
@@ -66,7 +64,6 @@ def save_allowed_users(users):
 
 
 def load_max_online():
-    """Загрузить сохраненные максимальные онлайны серверов."""
     try:
         with open(MAX_ONLINE_FILE, "r") as f:
             data = json.load(f)
@@ -79,7 +76,6 @@ def load_max_online():
 
 
 def save_max_online(data):
-    """Сохранить максимальные онлайны серверов в файл."""
     try:
         with open(MAX_ONLINE_FILE, "w") as f:
             json.dump({str(k): v for k, v in data.items()}, f, ensure_ascii=False, indent=2)
@@ -108,18 +104,18 @@ dp = Dispatcher()
 # Храним предыдущее состояние серверов и YouTubers
 server_state = {}
 youtubers_state = set()
-# Сохраняем последние данные YouTubers (для /youtube), чтобы не делать лишний запрос
 last_youtubers_data = []
 
-# Время последнего успешного вызова /status (общий кулдаун для всех)
+# Время последнего успешного вызова /status
 last_status_call = 0.0
 
 
 async def fetch_json(url, description="API"):
     """Универсальная функция для получения JSON данных."""
     try:
+        timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=15) as response:
+            async with session.get(url, timeout=timeout) as response:
                 if response.status == 200:
                     return await response.json()
                 else:
@@ -134,19 +130,16 @@ async def fetch_json(url, description="API"):
 
 
 async def fetch_servers():
-    """Получение данных серверов из API."""
     return await fetch_json(API_URL, "Servers API")
 
 
 async def fetch_youtubers():
-    """Получение списка YouTubers из API."""
     return await fetch_json(YOUTUBERS_API_URL, "YouTubers API")
 
 
 def update_max_online(server_id, online):
     """Обновить максимальный зафиксированный онлайн сервера, если нужно."""
     global MAX_ONLINE_STATE
-
     old_max = MAX_ONLINE_STATE.get(server_id, 0)
     if online > old_max:
         MAX_ONLINE_STATE[server_id] = online
@@ -215,7 +208,7 @@ async def check_youtubers():
 
 
 async def check_servers():
-    """Проверка изменений в онлайне серверов (без IP/портов)."""
+    """Проверка изменений в онлайне серверов."""
     global server_state
 
     data = await fetch_servers()
@@ -230,40 +223,60 @@ async def check_servers():
             server_id = server.get("id")
             if server_id:
                 online_value = int(server.get("online", 0))
+                # Берём maxonline из API, если есть — иначе fallback на локальный
+                api_max_online = server.get("maxonline", None)
+                if api_max_online is not None:
+                    try:
+                        api_max_online = int(api_max_online)
+                    except (ValueError, TypeError):
+                        api_max_online = None
+
                 current_state[server_id] = {
                     "name": server.get("name", "Без имени"),
                     "online": online_value,
+                    "ip": server.get("ip", "Нет данных"),
+                    "port": server.get("port", "Нет данных"),
+                    "maxonline": api_max_online,
                 }
+                # Обновляем локальный трекер максимального онлайна
                 update_max_online(server_id, online_value)
+                if api_max_online is not None:
+                    update_max_online(server_id, api_max_online)
 
     if not server_state:
         server_state = current_state
         logger.info(f"📊 Servers: начальное состояние ({len(server_state)} серверов)")
         return
 
+    # --- Новые серверы ---
     for server_id, info in current_state.items():
         name = info["name"]
         current_online = info["online"]
+        server_ip = info["ip"]
+        server_port = info["port"]
         is_ignored = server_id in IGNORED_SERVERS
 
         if server_id not in server_state:
             message = (
                 f"🆕 *Новый сервер!*\n"
-                f"📌 {name}\n"
-                f"🆔 ID: `{server_id}`"
+                f"📌 {html.escape(str(name))}\n"
+                f"🆔 ID: `{server_id}`\n"
+                f"🌐 IP: `{html.escape(str(server_ip))}`\n"
+                f"🔌 Port: `{html.escape(str(server_port))}`"
             )
             try:
                 await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
-                logger.info(f"🆕 Новый сервер: {name} (ID: {server_id})")
+                logger.info(f"🆕 Новый сервер: {name} (ID: {server_id}) {server_ip}:{server_port}")
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления о новом сервере: {e}")
             continue
 
+        # --- Переименование ---
         old_name = server_state[server_id]["name"]
         if old_name != name:
             message = (
                 f"✏️ *Переименован сервер!*\n"
-                f"📌 {old_name} → {name}\n"
+                f"📌 {html.escape(str(old_name))} → {html.escape(str(name))}\n"
                 f"🆔 ID: `{server_id}`"
             )
             try:
@@ -275,12 +288,13 @@ async def check_servers():
         if is_ignored:
             continue
 
+        # --- Изменение онлайна ---
         old_online = server_state[server_id]["online"]
 
         if current_online > old_online:
             diff = current_online - old_online
             message = (
-                f"🟢 *{name}*\n"
+                f"🟢 *{html.escape(str(name))}*\n"
                 f"Зашел игрок! (+{diff})\n"
                 f"Текущий онлайн: {current_online}"
             )
@@ -293,7 +307,7 @@ async def check_servers():
         elif current_online < old_online:
             diff = old_online - current_online
             message = (
-                f"🔴 *{name}*\n"
+                f"🔴 *{html.escape(str(name))}*\n"
                 f"Вышел игрок! (-{diff})\n"
                 f"Текущий онлайн: {current_online}"
             )
@@ -303,17 +317,24 @@ async def check_servers():
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления об онлайне: {e}")
 
+    # --- Удалённые серверы ---
     removed_servers = set(server_state.keys()) - set(current_state.keys())
     for server_id in removed_servers:
-        name = server_state[server_id]["name"]
+        old_info = server_state[server_id]
+        name = old_info["name"]
+        old_ip = old_info.get("ip", "Нет данных")
+        old_port = old_info.get("port", "Нет данных")
+
         message = (
             f"🗑️ *Сервер удален!*\n"
-            f"📌 {name}\n"
-            f"🆔 ID: `{server_id}`"
+            f"📌 {html.escape(str(name))}\n"
+            f"🆔 ID: `{server_id}`\n"
+            f"🌐 IP: `{html.escape(str(old_ip))}`\n"
+            f"🔌 Port: `{html.escape(str(old_port))}`"
         )
         try:
             await bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
-            logger.info(f"🗑️ Удален сервер: {name} (ID: {server_id})")
+            logger.info(f"🗑️ Удален сервер: {name} (ID: {server_id}) {old_ip}:{old_port}")
         except Exception as e:
             logger.error(f"Ошибка отправки уведомления об удалении сервера: {e}")
 
@@ -342,7 +363,6 @@ async def monitor_loop():
 
 # ============ ПРОВЕРКА ДОСТУПА ============
 async def check_access(message: types.Message) -> bool:
-    """Проверяет, есть ли у пользователя доступ к боту."""
     user_id = message.from_user.id
 
     if user_id == ADMIN_ID:
@@ -362,8 +382,6 @@ def is_admin(user_id: int) -> bool:
 
 
 def is_private(message: types.Message) -> bool:
-    """В группах/каналах бот реагирует только на /status. Все остальные
-    команды работают только в личных сообщениях."""
     return message.chat.type == "private"
 # ============================================================
 
@@ -411,7 +429,7 @@ async def access_command(message: types.Message):
         return
 
     if user_id in ALLOWED_USER_IDS:
-        await message.answer(f"i️ Пользователь {username} уже имеет доступ")
+        await message.answer(f"ℹ️ Пользователь {username} уже имеет доступ")
         return
 
     ALLOWED_USER_IDS.append(user_id)
@@ -463,7 +481,7 @@ async def unaccess_command(message: types.Message):
         return
 
     if user_id not in ALLOWED_USER_IDS:
-        await message.answer(f"i️ Пользователь {username} не имеет доступа")
+        await message.answer(f"ℹ️ Пользователь {username} не имеет доступа")
         return
 
     ALLOWED_USER_IDS.remove(user_id)
@@ -507,7 +525,6 @@ async def users_command(message: types.Message):
 # ============ КОМАНДА /youtube ============
 @dp.message(Command("youtube"))
 async def youtube_command(message: types.Message):
-    """Выгрузить всех YouTubers в JSON-файл."""
     if not is_private(message):
         return
 
@@ -540,7 +557,6 @@ async def youtube_command(message: types.Message):
 
 # ============ КОМАНДЫ БОТА ============
 def build_full_commands_text() -> str:
-    """Полный список команд — показывается всем, и обычным пользователям, и админам."""
     lines = [
         "🤖 *Бот мониторинга серверов*\n",
         "👥 *Команды пользователя:*",
@@ -571,10 +587,12 @@ async def start_command(message: types.Message):
 @dp.message(Command("status"))
 async def status_command(message: types.Message):
     """
-    /status работает в ЛЮБОМ чате, даже без доступа.
+    /status работает в ЛЮБОМ чате.
     Общий кулдаун STATUS_COOLDOWN секунд на всех пользователей.
-    Формат строки: Название сервера. Максимальный онлайн/текущий онлайн.
+    Формат строки: Название сервера. МаксОнлайн(API)/ТекущийОнлайн
     Серверы с ID 1–91 не показываются.
+    Максимальный онлайн берётся из поля maxonline API,
+    если его нет — из локального трекера MAX_ONLINE_STATE.
     """
     global last_status_call
 
@@ -596,7 +614,7 @@ async def status_command(message: types.Message):
         await message.answer("Нет данных")
         return
 
-    # Кулдаун засчитывается только при успешном выполнении команды
+    # Засчитываем кулдаун только после успешного получения данных
     last_status_call = now
 
     sorted_servers = sorted(
@@ -616,8 +634,25 @@ async def status_command(message: types.Message):
         name = server.get("name", "???")
         online = int(server.get("online", 0))
 
+        # Максимальный онлайн: приоритет — поле maxonline из API
+        api_max = server.get("maxonline", None)
+        if api_max is not None:
+            try:
+                api_max = int(api_max)
+            except (ValueError, TypeError):
+                api_max = None
+
+        # Обновляем локальный трекер
         update_max_online(server_id, online)
-        max_online = MAX_ONLINE_STATE.get(server_id, online)
+        if api_max is not None:
+            update_max_online(server_id, api_max)
+
+        # Выбираем итоговый максимум
+        local_max = MAX_ONLINE_STATE.get(server_id, online)
+        if api_max is not None:
+            max_online = max(api_max, local_max)
+        else:
+            max_online = local_max
 
         lines.append(f"{html.escape(str(name))}. {max_online}/{online}")
 
@@ -626,10 +661,8 @@ async def status_command(message: types.Message):
         return
 
     body = "\n".join(lines)
-
-    # Telegram ограничивает длину сообщения — при необходимости разбиваем,
-    # каждую часть всё равно оформляем цитированием
     max_len = 3800
+
     if len(body) <= max_len:
         await message.answer(f"<blockquote>{body}</blockquote>", parse_mode="HTML")
     else:
@@ -692,7 +725,6 @@ async def private_message_handler(message: types.Message):
 
 
 async def main():
-    """Запуск бота."""
     print("=" * 50)
     print("🤖 БОТ МОНИТОРИНГА СЕРВЕРОВ")
     print("=" * 50)
