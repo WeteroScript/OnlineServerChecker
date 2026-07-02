@@ -35,7 +35,7 @@ YOUTUBE_CHANNEL_ID = int(os.getenv("YOUTUBE_CHANNEL_ID", "-1004465586673"))
 # 🔒 Канал, на который нужно быть подписанным, чтобы пользоваться ботом
 SUBSCRIBE_CHANNEL_ID = int(os.getenv("SUBSCRIBE_CHANNEL_ID", "-1002623646036"))
 # Ссылка-приглашение на канал подписки (укажите в переменных окружения реальную ссылку!)
-SUBSCRIBE_CHANNEL_LINK = os.getenv("SUBSCRIBE_CHANNEL_LINK", "https://t.me/+INVITE_LINK_HERE")
+SUBSCRIBE_CHANNEL_LINK = os.getenv("SUBSCRIBE_CHANNEL_LINK", "https://t.me/WeterochinaTest")
 
 CHECK_INTERVAL = 15  # Секунд
 
