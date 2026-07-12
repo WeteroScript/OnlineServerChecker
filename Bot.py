@@ -3,8 +3,10 @@ import json
 import html
 import time
 import aiohttp
+from aiohttp import web
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from aiogram import Bot, Dispatcher, types, F
@@ -13,6 +15,7 @@ from aiogram.types import (
     BufferedInputFile,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    WebAppInfo,
     BotCommand,
     BotCommandScopeChat,
     BotCommandScopeDefault,
@@ -23,14 +26,26 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 YOUTUBERS_API_URL = "https://api.blackrussia.online/client/listOfYoutubers.json"
 
-# 📢 Канал: добавление / удаление (и переименование) серверов — и ТОЛЬКО ЭТО
+# 📢 Канал: добавление / удаление / переименование ОБЫЧНЫХ (не тестовых) серверов
 SERVERS_CHANNEL_ID = int(os.getenv("SERVERS_CHANNEL_ID", "-1003990585623"))
 
-# 📢 Канал: заход/выход игроков ТОЛЬКО сервера с ID 229 — и ТОЛЬКО ЭТО
+# 📢 Канал 1: заход/выход игроков ТОЛЬКО сервера с ID 229 — и ТОЛЬКО ЭТО
 PLAYERS_229_CHANNEL_ID = int(os.getenv("PLAYERS_229_CHANNEL_ID", "-1004400101443"))
+PLAYERS_229_SERVER_IDS = {229}
 
-# 📢 Канал: появление (и удаление) ников на YouTube-сервере — и ТОЛЬКО ЭТО
-YOUTUBE_CHANNEL_ID = int(os.getenv("YOUTUBE_CHANNEL_ID", "-1004465586673"))
+# 📢 Канал 2: заход/выход игроков ТОЛЬКО серверов с ID 150, 198, 199, 200, 201 — и ТОЛЬКО ЭТО
+PLAYERS_GROUP2_CHANNEL_ID = int(os.getenv("PLAYERS_GROUP2_CHANNEL_ID", "-1004394649490"))
+PLAYERS_GROUP2_SERVER_IDS = {150, 198, 199, 200, 201}
+
+# 📢 Канал 3: заход/выход игроков ТОЛЬКО серверов с ID 205–226 — и ТОЛЬКО ЭТО
+PLAYERS_GROUP3_CHANNEL_ID = int(os.getenv("PLAYERS_GROUP3_CHANNEL_ID", "-1004365467286"))
+PLAYERS_GROUP3_SERVER_IDS = set(range(205, 227))  # 205..226 включительно
+
+# 📢 Канал 4: появление / удаление ников YouTube — и ТОЛЬКО ЭТО
+YOUTUBE_CHANNEL_ID = int(os.getenv("YOUTUBE_CHANNEL_ID", "-1004339567631"))
+
+# 📢 Канал 5: добавление / удаление серверов (ЛЮБОЙ ID) — и ТОЛЬКО ЭТО
+TEST_SERVERS_CHANGE_CHANNEL_ID = int(os.getenv("TEST_SERVERS_CHANGE_CHANNEL_ID", "-1003726248159"))
 
 # 🔒 Канал, на который нужно быть подписанным, чтобы пользоваться ботом
 SUBSCRIBE_CHANNEL_ID = int(os.getenv("SUBSCRIBE_CHANNEL_ID", "-1002623646036"))
@@ -38,6 +53,13 @@ SUBSCRIBE_CHANNEL_ID = int(os.getenv("SUBSCRIBE_CHANNEL_ID", "-1002623646036"))
 SUBSCRIBE_CHANNEL_LINK = os.getenv("SUBSCRIBE_CHANNEL_LINK", "https://t.me/WeterochinaTest")
 
 CHECK_INTERVAL = 15  # Секунд
+
+# 🎛 Mini App (Telegram WebApp) — цветная HTML-панель управления ботом.
+# Обязательно HTTPS-адрес, на котором развёрнут этот же бот (см. Procfile: web-процесс).
+# Пример: https://your-app-name.up.railway.app  или  https://your-app.herokuapp.com
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
+WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+PORT = int(os.getenv("PORT", "8080"))
 
 # 👑 АДМИНЫ (можно перечислить несколько ID через запятую в переменной окружения ADMIN_IDS)
 _admin_ids_env = os.getenv("ADMIN_IDS", "5877790074")
@@ -53,23 +75,30 @@ if not ADMIN_IDS:
     ADMIN_IDS = {5877790074}
 ADMIN_ID = next(iter(ADMIN_IDS))  # для обратной совместимости / логов
 
-# 🎯 Единственный сервер, по которому шлём уведомления о заходе/выходе игроков
-TRACKED_PLAYER_SERVER_ID = 229
+# 🎯 Карта: ID сервера -> канал, куда слать уведомления о заходе/выходе игроков.
+# Сервера, не попавшие в карту, вообще не шлют такие уведомления никуда.
+PLAYER_CHANNEL_MAP: Dict[int, int] = {}
+for _sid in PLAYERS_229_SERVER_IDS:
+    PLAYER_CHANNEL_MAP[_sid] = PLAYERS_229_CHANNEL_ID
+for _sid in PLAYERS_GROUP2_SERVER_IDS:
+    PLAYER_CHANNEL_MAP[_sid] = PLAYERS_GROUP2_CHANNEL_ID
+for _sid in PLAYERS_GROUP3_SERVER_IDS:
+    PLAYER_CHANNEL_MAP[_sid] = PLAYERS_GROUP3_CHANNEL_ID
 
 # 🙈 Серверы, которые НЕ показываются в /status (тестовые серверы)
 HIDDEN_FROM_STATUS = set(range(1, 92))  # ID с 1 по 91
 
-# 🧪 Диапазон ID "тестовых" серверов для /getallip (когда-либо встречавшихся)
+# 🧪 Диапазон ID "тестовых" серверов (для маршрутизации add/remove уведомлений в канал 5)
 TEST_SERVER_RANGE = set(range(1, 92))  # ID с 1 по 91
 
-# 🚫 Диапазон ID, исключаемый из /getactualip
-ACTUAL_IP_EXCLUDE_RANGE = set(range(1, 91))  # ID с 1 по 90
+# 🚫 Диапазон ID, исключаемый из /getactualip и /getallip
+ACTUAL_IP_EXCLUDE_RANGE = set(range(1, 92))  # ID с 1 по 91
 
 # Файлы для хранения состояния
 ALLOWED_USERS_FILE = "allowed_users.json"
 MAX_ONLINE_FILE = "max_online.json"
 ALL_USERS_FILE = "all_users.json"
-TEST_SERVERS_FILE = "test_servers.json"
+SERVER_LOGS_FILE = "server_logs.json"  # Полная история добавлений/удалений ВСЕХ серверов
 
 # Файл-выгрузка для /youtube
 YOUTUBE_EXPORT_FILENAME = "youtubenickTestServerConnect.json"
@@ -127,13 +156,13 @@ def save_all_users(users):
     save_json_file(ALL_USERS_FILE, users)
 
 
-def load_test_servers():
-    data = load_json_file(TEST_SERVERS_FILE, {})
+def load_server_logs():
+    data = load_json_file(SERVER_LOGS_FILE, {})
     return {int(k): v for k, v in data.items()}
 
 
-def save_test_servers(data):
-    save_json_file(TEST_SERVERS_FILE, {str(k): v for k, v in data.items()})
+def save_server_logs(data):
+    save_json_file(SERVER_LOGS_FILE, {str(k): v for k, v in data.items()})
 
 
 ALLOWED_USER_IDS: List[int] = load_allowed_users()
@@ -144,7 +173,10 @@ save_allowed_users(ALLOWED_USER_IDS)
 
 MAX_ONLINE_STATE: Dict[int, int] = load_max_online()
 ALL_USER_IDS: List[int] = load_all_users()
-TEST_SERVERS_STATE: Dict[int, dict] = load_test_servers()
+
+# SERVER_LOGS_STATE: server_id -> список "эпизодов" (каждое появление/удаление сервера).
+# Эпизод: {id, name, ip, port, url, added_date, removed_date (или None), status}
+SERVER_LOGS_STATE: Dict[int, List[dict]] = load_server_logs()
 # ================================================
 
 logging.basicConfig(
@@ -175,8 +207,9 @@ DEFAULT_COMMANDS = [
 ACCESS_COMMANDS = DEFAULT_COMMANDS + [
     BotCommand(command="youtube", description="Ники YouTube (.json)"),
     BotCommand(command="getip", description="IP сервера по ID"),
-    BotCommand(command="getallip", description="IP всех тестовых серверов (.json)"),
+    BotCommand(command="getallip", description="IP всех серверов за всё время (.json)"),
     BotCommand(command="getactualip", description="IP актуальных серверов (.json)"),
+    BotCommand(command="getlogsip", description="Лог изменений серверов (.json)"),
 ]
 
 ADMIN_COMMANDS = ACCESS_COMMANDS + [
@@ -239,18 +272,61 @@ def update_max_online(server_id, online):
         save_max_online(MAX_ONLINE_STATE)
 
 
-def update_test_server_store(server_id, info):
-    """Запоминаем инфу о тестовом сервере (ID 1-91), чтобы /getallip
-    мог отдать данные даже по серверам, которые уже удалены из API."""
-    if server_id in TEST_SERVER_RANGE:
-        TEST_SERVERS_STATE[server_id] = {
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def ensure_log_entry(server_id, info):
+    """
+    Фиксируем сервер в общей истории (ВСЕ ID, без исключений).
+    Если для этого ID уже есть "открытый" эпизод (ещё не удалён) — просто
+    обновляем в нём актуальные name/ip/port/url.
+    Если открытого эпизода нет — значит сервер только что появился в API,
+    создаём новый эпизод с датой добавления.
+    """
+    episodes = SERVER_LOGS_STATE.setdefault(server_id, [])
+    active = next((ep for ep in episodes if ep.get("removed_date") is None), None)
+
+    if active:
+        active["name"] = info.get("name", "Без имени")
+        active["ip"] = info.get("ip", "Нет данных")
+        active["port"] = info.get("port", "Нет данных")
+        active["url"] = info.get("url") or None
+        active["status"] = "в API"
+    else:
+        episodes.append({
             "id": server_id,
             "name": info.get("name", "Без имени"),
             "ip": info.get("ip", "Нет данных"),
             "port": info.get("port", "Нет данных"),
             "url": info.get("url") or None,
-        }
-        save_test_servers(TEST_SERVERS_STATE)
+            "added_date": now_iso(),
+            "removed_date": None,
+            "status": "в API",
+        })
+
+    save_server_logs(SERVER_LOGS_STATE)
+
+
+def mark_log_removed(server_id):
+    """Закрываем последний открытый эпизод сервера — ставим дату удаления и статус."""
+    episodes = SERVER_LOGS_STATE.get(server_id, [])
+    for ep in reversed(episodes):
+        if ep.get("removed_date") is None:
+            ep["removed_date"] = now_iso()
+            ep["status"] = "не в API"
+            break
+    save_server_logs(SERVER_LOGS_STATE)
+
+
+def get_latest_known_info(server_id) -> Optional[dict]:
+    """Последняя известная инфа (name/ip/port/url) по серверу — из активного,
+    либо, если такого нет, из последнего эпизода истории."""
+    episodes = SERVER_LOGS_STATE.get(server_id)
+    if not episodes:
+        return None
+    active = next((ep for ep in episodes if ep.get("removed_date") is None), None)
+    return active if active else episodes[-1]
 
 
 def is_admin(user_id: int) -> bool:
@@ -309,11 +385,30 @@ async def require_access(answer, user_id: int, chat_type: str) -> bool:
     return False
 
 
+def user_role(user_id: int) -> str:
+    if is_admin(user_id):
+        return "admin"
+    if user_id in ALLOWED_USER_IDS:
+        return "access"
+    return "user"
+
+
+def webapp_button_url(user_id: int) -> Optional[str]:
+    """URL цветной Mini App-панели для конкретного пользователя (с его ролью в query)."""
+    if not WEBAPP_URL:
+        return None
+    return f"{WEBAPP_URL}/webapp?role={user_role(user_id)}&uid={user_id}"
+
+
 def main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="📊 Статус", callback_data="menu_status")],
-        [InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")],
-    ]
+    rows = []
+
+    webapp_url = webapp_button_url(user_id)
+    if webapp_url:
+        rows.append([InlineKeyboardButton(text="🎛️ Открыть панель", web_app=WebAppInfo(url=webapp_url))])
+
+    rows.append([InlineKeyboardButton(text="📊 Статус", callback_data="menu_status")])
+    rows.append([InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")])
     if is_admin(user_id) or user_id in ALLOWED_USER_IDS:
         rows.append([
             InlineKeyboardButton(text="🎬 YouTube ники", callback_data="menu_youtube"),
@@ -321,6 +416,9 @@ def main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
         rows.append([
             InlineKeyboardButton(text="🌐 GetAllIP", callback_data="menu_getallip"),
             InlineKeyboardButton(text="🗂 GetActualIP", callback_data="menu_getactualip"),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="🗒 GetLogsIP", callback_data="menu_getlogsip"),
         ])
     if is_admin(user_id):
         rows.append([
@@ -352,8 +450,9 @@ def build_help_text(user_id: int) -> str:
             "🔑 *Команды для пользователей с доступом:*",
             "/youtube — Выгрузить .json со всеми никами YouTubers",
             "/getip <id> — Название, IP, порт сервера по ID",
-            "/getallip — .json IP всех тестовых серверов (когда-либо добавлялись)",
-            "/getactualip — .json IP всех серверов, кроме ID 1–90",
+            "/getallip — .json IP всех серверов, когда-либо добавлявшихся в API (кроме ID 1–91)",
+            "/getactualip — .json IP всех текущих серверов, кроме ID 1–91",
+            "/getlogsip — .json лог всех изменений серверов (добавление/удаление, кроме онлайна)",
         ]
     if is_admin(user_id):
         lines += [
@@ -430,15 +529,28 @@ async def check_youtubers():
     youtubers_state = current_youtubers
 
 
+async def notify_server_add_remove(message: str):
+    """
+    Уведомления о добавлении/удалении сервера.
+    ТОЛЬКО в TEST_SERVERS_CHANGE_CHANNEL_ID (-1003726248159) — для ЛЮБОГО ID,
+    без исключений и без дублирования в другие каналы.
+    """
+    try:
+        await bot.send_message(TEST_SERVERS_CHANGE_CHANNEL_ID, message, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления о добавлении/удалении сервера: {e}")
+
+
 # ============ МОНИТОРИНГ: СЕРВЕРЫ ============
 async def check_servers():
     """
     Проверка изменений по серверам.
 
-    - Добавление / удаление / переименование серверов -> ТОЛЬКО SERVERS_CHANNEL_ID
-    - Заход/выход игроков -> ТОЛЬКО для сервера TRACKED_PLAYER_SERVER_ID (229),
-      уходит ТОЛЬКО в PLAYERS_229_CHANNEL_ID. Остальные сервера никуда не шлют
-      уведомления о заходе/выходе игроков.
+    - Добавление / удаление сервера (любой ID) -> ТОЛЬКО TEST_SERVERS_CHANGE_CHANNEL_ID
+    - Переименование любого сервера -> SERVERS_CHANNEL_ID
+    - Заход/выход игроков -> ТОЛЬКО для серверов из PLAYER_CHANNEL_MAP (229, 150,
+      198-201, 205-226), каждый уходит СТРОГО в свой канал. Остальные сервера
+      никуда не шлют уведомления о заходе/выходе игроков.
     """
     global server_state
 
@@ -475,7 +587,8 @@ async def check_servers():
                 if api_max_online is not None:
                     update_max_online(server_id, api_max_online)
 
-                update_test_server_store(server_id, info)
+                # Полная история (для /getlogsip и /getallip) — ВСЕ сервера, без исключений
+                ensure_log_entry(server_id, info)
 
     if not server_state:
         server_state = current_state
@@ -497,11 +610,8 @@ async def check_servers():
                 f"🌐 IP: `{html.escape(str(server_ip))}`\n"
                 f"🔌 Port: `{html.escape(str(server_port))}`"
             )
-            try:
-                await bot.send_message(SERVERS_CHANNEL_ID, message, parse_mode="Markdown")
-                logger.info(f"🆕 Новый сервер: {name} (ID: {server_id}) {server_ip}:{server_port}")
-            except Exception as e:
-                logger.error(f"Ошибка отправки уведомления о новом сервере: {e}")
+            await notify_server_add_remove(message)
+            logger.info(f"🆕 Новый сервер: {name} (ID: {server_id}) {server_ip}:{server_port}")
             continue
 
         # --- Переименование ---
@@ -518,8 +628,10 @@ async def check_servers():
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления о переименовании: {e}")
 
-        # --- Заход/выход игроков: ТОЛЬКО отслеживаемый сервер ---
-        if server_id != TRACKED_PLAYER_SERVER_ID:
+        # --- Заход/выход игроков: ТОЛЬКО сервера из PLAYER_CHANNEL_MAP,
+        # каждый шлёт СТРОГО в свой канал ---
+        target_channel = PLAYER_CHANNEL_MAP.get(server_id)
+        if target_channel is None:
             continue
 
         old_online = server_state[server_id]["online"]
@@ -532,7 +644,7 @@ async def check_servers():
                 f"Текущий онлайн: {current_online}"
             )
             try:
-                await bot.send_message(PLAYERS_229_CHANNEL_ID, message, parse_mode="Markdown")
+                await bot.send_message(target_channel, message, parse_mode="Markdown")
                 logger.info(f"🟢 {name}: {old_online} → {current_online}")
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления об онлайне: {e}")
@@ -545,7 +657,7 @@ async def check_servers():
                 f"Текущий онлайн: {current_online}"
             )
             try:
-                await bot.send_message(PLAYERS_229_CHANNEL_ID, message, parse_mode="Markdown")
+                await bot.send_message(target_channel, message, parse_mode="Markdown")
                 logger.info(f"🔴 {name}: {old_online} → {current_online}")
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления об онлайне: {e}")
@@ -558,6 +670,8 @@ async def check_servers():
         old_ip = old_info.get("ip", "Нет данных")
         old_port = old_info.get("port", "Нет данных")
 
+        mark_log_removed(server_id)
+
         message = (
             f"🗑️ *Сервер удален!*\n"
             f"📌 {html.escape(str(name))}\n"
@@ -565,11 +679,8 @@ async def check_servers():
             f"🌐 IP: `{html.escape(str(old_ip))}`\n"
             f"🔌 Port: `{html.escape(str(old_port))}`"
         )
-        try:
-            await bot.send_message(SERVERS_CHANNEL_ID, message, parse_mode="Markdown")
-            logger.info(f"🗑️ Удален сервер: {name} (ID: {server_id}) {old_ip}:{old_port}")
-        except Exception as e:
-            logger.error(f"Ошибка отправки уведомления об удалении сервера: {e}")
+        await notify_server_add_remove(message)
+        logger.info(f"🗑️ Удален сервер: {name} (ID: {server_id}) {old_ip}:{old_port}")
 
     server_state = current_state
 
@@ -643,6 +754,8 @@ async def send_status(answer, user_id: int, chat_id: int, chat_type: str):
         name = server.get("name", "???")
         online = int(server.get("online", 0))
 
+        # Берём АКТУАЛЬНОЕ значение maxonline из API прямо сейчас,
+        # а НЕ исторический максимум за всё время.
         api_max = server.get("maxonline", None)
         if api_max is not None:
             try:
@@ -650,17 +763,16 @@ async def send_status(answer, user_id: int, chat_id: int, chat_type: str):
             except (ValueError, TypeError):
                 api_max = None
 
+        # Отдельно продолжаем копить исторический максимум (может пригодиться
+        # для других целей), но в /status он больше не используется.
         update_max_online(server_id, online)
         if api_max is not None:
             update_max_online(server_id, api_max)
 
-        local_max = MAX_ONLINE_STATE.get(server_id, online)
-        if api_max is not None:
-            max_online = max(api_max, local_max)
-        else:
-            max_online = local_max
+        max_online = api_max if api_max is not None else online
 
-        lines.append(f"{html.escape(str(name))}. {max_online}/{online}")
+        # Формат: "Название сервера. МаксОнлайн" — обычным текстом, одна строка на сервер
+        lines.append(f"{name}. {max_online}")
 
     if not lines:
         await answer("Нет данных для отображения")
@@ -670,19 +782,19 @@ async def send_status(answer, user_id: int, chat_id: int, chat_type: str):
     max_len = 3800
 
     if len(body) <= max_len:
-        await answer(f"<blockquote>{body}</blockquote>", parse_mode="HTML")
+        await answer(body)
     else:
         chunk = []
         chunk_len = 0
         for line in lines:
             if chunk_len + len(line) + 1 > max_len:
-                await answer(f"<blockquote>{chr(10).join(chunk)}</blockquote>", parse_mode="HTML")
+                await answer("\n".join(chunk))
                 chunk = []
                 chunk_len = 0
             chunk.append(line)
             chunk_len += len(line) + 1
         if chunk:
-            await answer(f"<blockquote>{chr(10).join(chunk)}</blockquote>", parse_mode="HTML")
+            await answer("\n".join(chunk))
 
 
 def format_server_entry(name, ip, port, url) -> dict:
@@ -695,13 +807,22 @@ def format_server_entry(name, ip, port, url) -> dict:
 
 
 async def send_getallip(message: types.Message):
-    entries = [
-        format_server_entry(v.get("name"), v.get("ip"), v.get("port"), v.get("url"))
-        for _id, v in sorted(TEST_SERVERS_STATE.items())
-    ]
+    """Все сервера, которые когда-либо добавлялись в API за всё время,
+    кроме ID с 1 по 91."""
+    entries = []
+    for server_id in sorted(SERVER_LOGS_STATE.keys()):
+        if server_id in ACTUAL_IP_EXCLUDE_RANGE:
+            continue
+        info = get_latest_known_info(server_id)
+        if not info:
+            continue
+        entries.append(format_server_entry(
+            info.get("name"), info.get("ip"), info.get("port"), info.get("url")
+        ))
+
     payload = json.dumps(entries, ensure_ascii=False, indent=2)
-    file = BufferedInputFile(payload.encode("utf-8"), filename="all_test_servers_ip.json")
-    await message.answer_document(file, caption=f"🧪 Тестовых серверов в базе: {len(entries)}")
+    file = BufferedInputFile(payload.encode("utf-8"), filename="all_servers_ip.json")
+    await message.answer_document(file, caption=f"🌐 Всего серверов в истории: {len(entries)}")
 
 
 async def send_getactualip(message: types.Message):
@@ -724,6 +845,34 @@ async def send_getactualip(message: types.Message):
     payload = json.dumps(entries, ensure_ascii=False, indent=2)
     file = BufferedInputFile(payload.encode("utf-8"), filename="actual_servers_ip.json")
     await message.answer_document(file, caption=f"🌐 Актуальных серверов: {len(entries)}")
+
+
+async def send_getlogsip(message: types.Message):
+    """
+    Полный лог ВСЕХ изменений серверов (кроме онлайна): когда сервер был
+    добавлен, удалён (если удалён), и его текущий статус в API.
+    """
+    entries = []
+    for server_id, episodes in sorted(SERVER_LOGS_STATE.items()):
+        for ep in episodes:
+            entry = {
+                "id": server_id,
+                "name": ep.get("name"),
+                "ip": ep.get("ip"),
+                "port": ep.get("port"),
+                "added_date": ep.get("added_date"),
+            }
+            if ep.get("url"):
+                entry["url"] = ep.get("url")
+            # Если сервер всё ещё есть в API — строки "removed_date" нет вообще
+            if ep.get("removed_date"):
+                entry["removed_date"] = ep.get("removed_date")
+            entry["status"] = ep.get("status", "неизвестно")
+            entries.append(entry)
+
+    payload = json.dumps(entries, ensure_ascii=False, indent=2)
+    file = BufferedInputFile(payload.encode("utf-8"), filename="servers_change_log.json")
+    await message.answer_document(file, caption=f"🗒 Всего записей в логе: {len(entries)}")
 
 
 # ============ КОМАНДЫ: СТАРТ / ПОМОЩЬ / СТАТУС ============
@@ -763,18 +912,7 @@ async def status_command(message: types.Message):
 
 
 # ============ КОМАНДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ С ДОСТУПОМ ============
-@dp.message(Command("youtube"))
-async def youtube_command(message: types.Message):
-    if not is_private(message):
-        return
-
-    track_user(message.from_user.id)
-
-    if not await require_subscription(message.answer, message.from_user.id):
-        return
-    if not await require_access(message.answer, message.from_user.id, message.chat.type):
-        return
-
+async def send_youtube_export(message: types.Message):
     data = last_youtubers_data
     if not data:
         data = await fetch_youtubers()
@@ -794,6 +932,22 @@ async def youtube_command(message: types.Message):
     file = BufferedInputFile(payload.encode("utf-8"), filename=YOUTUBE_EXPORT_FILENAME)
 
     await message.answer_document(file, caption=f"🎬 Всего ников: {len(nicknames)}")
+
+
+@dp.message(Command("youtube"))
+async def youtube_command(message: types.Message):
+    if not is_private(message):
+        return
+
+    track_user(message.from_user.id)
+
+    if not await require_subscription(message.answer, message.from_user.id):
+        return
+    if not await require_access(message.answer, message.from_user.id, message.chat.type):
+        return
+
+    await send_youtube_export(message)
+
 
 
 @dp.message(Command("getip"))
@@ -874,8 +1028,8 @@ async def getactualip_command(message: types.Message):
     await send_getactualip(message)
 
 
-@dp.message(Command("refresh"))
-async def refresh_command(message: types.Message):
+@dp.message(Command("getlogsip"))
+async def getlogsip_command(message: types.Message):
     if not is_private(message):
         return
 
@@ -886,6 +1040,10 @@ async def refresh_command(message: types.Message):
     if not await require_access(message.answer, message.from_user.id, message.chat.type):
         return
 
+    await send_getlogsip(message)
+
+
+async def do_refresh(message: types.Message):
     global server_state, youtubers_state
 
     server_state = {}
@@ -899,6 +1057,21 @@ async def refresh_command(message: types.Message):
         f"📊 Серверов: {len(server_state)}\n"
         f"🎬 YouTubers: {len(youtubers_state)}"
     )
+
+
+@dp.message(Command("refresh"))
+async def refresh_command(message: types.Message):
+    if not is_private(message):
+        return
+
+    track_user(message.from_user.id)
+
+    if not await require_subscription(message.answer, message.from_user.id):
+        return
+    if not await require_access(message.answer, message.from_user.id, message.chat.type):
+        return
+
+    await do_refresh(message)
 
 
 # ============ КОМАНДЫ УПРАВЛЕНИЯ ДОСТУПОМ (ADMIN) ============
@@ -996,15 +1169,7 @@ async def unaccess_command(message: types.Message):
     logger.info(f"❌ Доступ забран: {username}")
 
 
-@dp.message(Command("users"))
-async def users_command(message: types.Message):
-    if not is_private(message):
-        return
-
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ Только админ может просматривать список")
-        return
-
+async def send_users_list(message: types.Message):
     if not ALLOWED_USER_IDS:
         await message.answer("📋 Список пользователей с доступом пуст")
         return
@@ -1027,6 +1192,27 @@ async def users_command(message: types.Message):
     await message.answer("\n".join(lines), parse_mode="Markdown")
 
 
+@dp.message(Command("users"))
+async def users_command(message: types.Message):
+    if not is_private(message):
+        return
+
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Только админ может просматривать список")
+        return
+
+    await send_users_list(message)
+
+
+@dp.message(Command("mail"))
+async def mail_command(message: types.Message):
+    if not is_private(message):
+        return
+
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Только админ может делать рассылку")
+        return
+
 @dp.message(Command("mail"))
 async def mail_command(message: types.Message):
     if not is_private(message):
@@ -1041,7 +1227,10 @@ async def mail_command(message: types.Message):
         await message.answer("❌ Использование: /mail <текст сообщения>")
         return
 
-    mail_text = parts[1]
+    await send_mail_broadcast(message, parts[1])
+
+
+async def send_mail_broadcast(message: types.Message, mail_text: str):
     recipients = list(ALL_USER_IDS)
 
     if not recipients:
@@ -1153,6 +1342,16 @@ async def menu_getactualip_callback(callback: types.CallbackQuery):
     await send_getactualip(callback.message)
 
 
+@dp.callback_query(F.data == "menu_getlogsip")
+async def menu_getlogsip_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    if not await require_subscription(callback.message.answer, callback.from_user.id):
+        return
+    if not await require_access(callback.message.answer, callback.from_user.id, "private"):
+        return
+    await send_getlogsip(callback.message)
+
+
 @dp.callback_query(F.data == "menu_users")
 async def menu_users_callback(callback: types.CallbackQuery):
     await callback.answer()
@@ -1174,6 +1373,79 @@ async def menu_refresh_callback(callback: types.CallbackQuery):
     await callback.message.answer(
         f"✅ Состояние обновлено!\n📊 Серверов: {len(server_state)}\n🎬 YouTubers: {len(youtubers_state)}"
     )
+
+
+# ============ ОБРАБОТКА ДАННЫХ ИЗ MINI APP (WebApp) ============
+@dp.message(F.web_app_data)
+async def web_app_data_handler(message: types.Message):
+    """
+    Кнопки цветной Mini App-панели шлют JSON вида {"action": "...", ...}
+    через Telegram.WebApp.sendData() — здесь мы это ловим и выполняем
+    ту же логику, что и соответствующие команды/кнопки.
+    """
+    track_user(message.from_user.id)
+    user_id = message.from_user.id
+
+    try:
+        payload = json.loads(message.web_app_data.data)
+    except Exception:
+        await message.answer("❌ Панель прислала некорректные данные")
+        return
+
+    action = payload.get("action")
+
+    if not await require_subscription(message.answer, user_id):
+        return
+
+    if action == "status":
+        await send_status(message.answer, user_id, message.chat.id, message.chat.type)
+
+    elif action == "help":
+        await message.answer(build_help_text(user_id), parse_mode="Markdown")
+
+    elif action == "youtube":
+        if not await require_access(message.answer, user_id, "private"):
+            return
+        await send_youtube_export(message)
+
+    elif action == "getallip":
+        if not await require_access(message.answer, user_id, "private"):
+            return
+        await send_getallip(message)
+
+    elif action == "getactualip":
+        if not await require_access(message.answer, user_id, "private"):
+            return
+        await send_getactualip(message)
+
+    elif action == "getlogsip":
+        if not await require_access(message.answer, user_id, "private"):
+            return
+        await send_getlogsip(message)
+
+    elif action == "users":
+        if not is_admin(user_id):
+            await message.answer("❌ Только админ может просматривать список")
+            return
+        await send_users_list(message)
+
+    elif action == "refresh":
+        if not await require_access(message.answer, user_id, "private"):
+            return
+        await do_refresh(message)
+
+    elif action == "mail":
+        if not is_admin(user_id):
+            await message.answer("❌ Только админ может делать рассылку")
+            return
+        mail_text = (payload.get("text") or "").strip()
+        if not mail_text:
+            await message.answer("❌ Пустой текст рассылки")
+            return
+        await send_mail_broadcast(message, mail_text)
+
+    else:
+        await message.answer("❓ Неизвестное действие от панели")
 
 
 # ============ ОБРАБОТЧИК НЕИЗВЕСТНЫХ СООБЩЕНИЙ В ЛС ============
@@ -1199,12 +1471,15 @@ async def main():
     print("🤖 БОТ МОНИТОРИНГА СЕРВЕРОВ")
     print("=" * 50)
     print(f"👑 Админы: {ADMIN_IDS}")
-    print(f"📢 Канал серверов (add/remove): {SERVERS_CHANNEL_ID}")
-    print(f"📢 Канал игроков сервера {TRACKED_PLAYER_SERVER_ID}: {PLAYERS_229_CHANNEL_ID}")
-    print(f"📢 Канал YouTube: {YOUTUBE_CHANNEL_ID}")
+    print(f"📢 Канал переименований серверов: {SERVERS_CHANNEL_ID}")
+    print(f"📢 Канал add/remove серверов (все ID): {TEST_SERVERS_CHANGE_CHANNEL_ID}")
+    print(f"📢 Канал онлайна сервера 229: {PLAYERS_229_CHANNEL_ID}")
+    print(f"📢 Канал онлайна серверов 150,198-201: {PLAYERS_GROUP2_CHANNEL_ID}")
+    print(f"📢 Канал онлайна серверов 205-226: {PLAYERS_GROUP3_CHANNEL_ID}")
+    print(f"📢 Канал YouTube (add/remove ников): {YOUTUBE_CHANNEL_ID}")
     print(f"🔒 Канал обязательной подписки: {SUBSCRIBE_CHANNEL_ID}")
     print(f"⏱️  Интервал мониторинга: {CHECK_INTERVAL} сек")
-    print(f"🙈 Скрыто в /status: ID 1–91")
+    print(f"🙈 Скрыто в /status и исключено из /getallip, /getactualip: ID 1–91")
     print(f"👥 Пользователей с доступом: {len(ALLOWED_USER_IDS)}")
     print(f"🕐 Кулдаун /status (групповые чаты): {STATUS_COOLDOWN} сек, свой на чат")
     print("=" * 50)
