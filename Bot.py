@@ -29,6 +29,7 @@ YOUTUBERS_API_URL = "https://api.blackrussia.online/client/listOfYoutubers.json"
 # Канал изменений app-config.json
 APP_CONFIG_URL = "https://api.blackrussia.online/client/app-config.json"
 APP_CONFIG_CHANNEL_ID = int(os.getenv("APP_CONFIG_CHANNEL_ID", "-1003773958839"))
+APP_CONFIG_STATE_FILE = "app_config_state.json"
 
 # 📢 Канал: добавление / удаление / переименование ОБЫЧНЫХ (не тестовых) серверов
 SERVERS_CHANNEL_ID = int(os.getenv("SERVERS_CHANNEL_ID", "-1003990585623"))
@@ -196,7 +197,7 @@ dp = Dispatcher()
 server_state = {}
 youtubers_state = set()
 last_youtubers_data = []
-app_config_state = None
+app_config_state = load_json_file(APP_CONFIG_STATE_FILE, None)
 
 # Кулдаун /status по чатам: {chat_id: last_call_timestamp}
 status_cooldowns: Dict[int, float] = {}
@@ -337,6 +338,7 @@ async def check_app_config():
 
     if app_config_state is None:
         app_config_state = data
+        save_json_file(APP_CONFIG_STATE_FILE, data)
         logger.info("App config: начальное состояние загружено")
         return
 
@@ -366,6 +368,7 @@ async def check_app_config():
             )
 
         app_config_state = data
+        save_json_file(APP_CONFIG_STATE_FILE, data)
         logger.info(f"App config: отправлено изменений — {len(changes)}")
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления об изменениях app-config.json: {e}")
