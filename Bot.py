@@ -26,6 +26,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://api.blackhub.team/servers.json"
 YOUTUBERS_API_URL = "https://api.blackrussia.online/client/listOfYoutubers.json"
 
+# Канал изменений app-config.json
+APP_CONFIG_URL = "https://api.blackrussia.online/client/app-config.json"
+APP_CONFIG_CHANNEL_ID = int(os.getenv("APP_CONFIG_CHANNEL_ID", "-1003773958839"))
+
 # 📢 Канал: добавление / удаление / переименование ОБЫЧНЫХ (не тестовых) серверов
 SERVERS_CHANNEL_ID = int(os.getenv("SERVERS_CHANNEL_ID", "-1003990585623"))
 
@@ -192,6 +196,7 @@ dp = Dispatcher()
 server_state = {}
 youtubers_state = set()
 last_youtubers_data = []
+app_config_state = None
 
 # Кулдаун /status по чатам: {chat_id: last_call_timestamp}
 status_cooldowns: Dict[int, float] = {}
@@ -261,6 +266,109 @@ async def fetch_servers():
 
 async def fetch_youtubers():
     return await fetch_json(YOUTUBERS_API_URL, "YouTubers API")
+
+def _app_config_json_value(value) -> str:
+    """Компактное JSON-представление значения для уведомления."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _collect_app_config_changes(old_value, new_value, path="$") -> List[str]:
+    """Рекурсивно собирает изменения всех ключей, значений и элементов массивов."""
+    changes = []
+
+    if isinstance(old_value, dict) and isinstance(new_value, dict):
+        all_keys = sorted(set(old_value) | set(new_value))
+        for key in all_keys:
+            child_path = f"{path}[{json.dumps(str(key), ensure_ascii=False)}]"
+            if key not in old_value:
+                changes.append(
+                    f"Добавлено: {child_path}\n"
+                    f"Значение: {_app_config_json_value(new_value[key])}"
+                )
+            elif key not in new_value:
+                changes.append(
+                    f"Удалено: {child_path}\n"
+                    f"Было: {_app_config_json_value(old_value[key])}"
+                )
+            else:
+                changes.extend(
+                    _collect_app_config_changes(old_value[key], new_value[key], child_path)
+                )
+        return changes
+
+    if isinstance(old_value, list) and isinstance(new_value, list):
+        common_length = min(len(old_value), len(new_value))
+        for index in range(common_length):
+            changes.extend(
+                _collect_app_config_changes(
+                    old_value[index], new_value[index], f"{path}[{index}]"
+                )
+            )
+        for index in range(common_length, len(new_value)):
+            changes.append(
+                f"Добавлен элемент: {path}[{index}]\n"
+                f"Значение: {_app_config_json_value(new_value[index])}"
+            )
+        for index in range(common_length, len(old_value)):
+            changes.append(
+                f"Удалён элемент: {path}[{index}]\n"
+                f"Было: {_app_config_json_value(old_value[index])}"
+            )
+        return changes
+
+    if type(old_value) is not type(new_value) or old_value != new_value:
+        changes.append(
+            f"Изменено: {path}\n"
+            f"Было: {_app_config_json_value(old_value)}\n"
+            f"Стало: {_app_config_json_value(new_value)}"
+        )
+
+    return changes
+
+
+async def check_app_config():
+    """Проверяет app-config.json и отправляет в выделенный канал все обнаруженные изменения."""
+    global app_config_state
+
+    data = await fetch_json(APP_CONFIG_URL, "App config API")
+    if data is None:
+        logger.warning("App config API: нет данных или некорректный JSON")
+        return
+
+    if app_config_state is None:
+        app_config_state = data
+        logger.info("App config: начальное состояние загружено")
+        return
+
+    changes = _collect_app_config_changes(app_config_state, data)
+    if not changes:
+        return
+
+    message = (
+        f"Изменения app-config.json\n"
+        f"Время: {now_iso()}\n"
+        f"Количество изменений: {len(changes)}\n\n"
+        + "\n\n".join(changes)
+    )
+
+    try:
+        if len(message) <= 3900:
+            await bot.send_message(APP_CONFIG_CHANNEL_ID, message)
+        else:
+            document = BufferedInputFile(
+                message.encode("utf-8"),
+                filename="app-config-changes.txt"
+            )
+            await bot.send_document(
+                APP_CONFIG_CHANNEL_ID,
+                document,
+                caption=f"Изменения app-config.json: {len(changes)}"
+            )
+
+        app_config_state = data
+        logger.info(f"App config: отправлено изменений — {len(changes)}")
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления об изменениях app-config.json: {e}")
 
 
 def update_max_online(server_id, online):
@@ -692,6 +800,7 @@ async def monitor_loop():
     try:
         await check_servers()
         await check_youtubers()
+        await check_app_config()
     except Exception as e:
         logger.error(f"Ошибка инициализации мониторинга: {e}", exc_info=True)
 
@@ -700,6 +809,7 @@ async def monitor_loop():
         try:
             await check_servers()
             await check_youtubers()
+            await check_app_config()
         except Exception as e:
             logger.error(f"Ошибка в мониторинге: {e}", exc_info=True)
 
@@ -1477,6 +1587,7 @@ async def main():
     print(f"📢 Канал онлайна серверов 150,198-201: {PLAYERS_GROUP2_CHANNEL_ID}")
     print(f"📢 Канал онлайна серверов 205-226: {PLAYERS_GROUP3_CHANNEL_ID}")
     print(f"📢 Канал YouTube (add/remove ников): {YOUTUBE_CHANNEL_ID}")
+    print(f"📢 Канал изменений app-config.json: {APP_CONFIG_CHANNEL_ID}")
     print(f"🔒 Канал обязательной подписки: {SUBSCRIBE_CHANNEL_ID}")
     print(f"⏱️  Интервал мониторинга: {CHECK_INTERVAL} сек")
     print(f"🙈 Скрыто в /status и исключено из /getallip, /getactualip: ID 1–91")
